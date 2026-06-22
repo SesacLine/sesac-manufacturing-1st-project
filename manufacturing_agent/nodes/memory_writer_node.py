@@ -27,17 +27,19 @@ def _compact_sql_artifact_for_memory(sql: Optional[SQLHistoryArtifact]) -> str:
         lines.append(sql.summary)
     if sql.limitations:
         lines.append(f"limitations={sql.limitations[:3]}")
-    return " | ".join(lines)[:2500]
+    # 길이 캡 없이 원문 그대로 보존한다(sample_rows는 query당 2개·query 4개로 이미 구조적으로 제한됨).
+    return " | ".join(lines)
 
 def _compact_evidence_artifact_for_memory(ev: Optional[EvidenceArtifact]) -> str:
     if not ev:
         return ""
     sources = [c.get("source_id") for c in (ev.citations or [])[:5]]
     queries = (ev.queries or [])[:3]
+    # 길이 캡 없이 원문 그대로 보존한다(evidence_summary는 LLM 생성 요약으로 토큰 상한이 이미 적용됨).
     return (
         f"status={ev.status}; profile={ev.retrieval_profile}; queries={queries}; "
         f"sources={sources}; summary={ev.evidence_summary}; limitations={ev.limitations[:3]}"
-    )[:2500]
+    )
 
 def _should_save_diagnosis_context(state: ManufacturingState, pred: Optional[PredictionResult], packet: Optional[ContextPacket]) -> bool:
     if not pred or pred.status not in {"OK", "PARTIAL"}:

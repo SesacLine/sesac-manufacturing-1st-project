@@ -2,7 +2,7 @@ from __future__ import annotations
 from manufacturing_agent._common import *  # noqa: F401,F403
 from manufacturing_agent.config import *  # noqa: F401,F403
 from manufacturing_agent.context.normalizer import normalize_context
-from manufacturing_agent.context.packer import _llm_context_carryover, _messages_to_recent_turns, pack_contexts, resolve_context
+from manufacturing_agent.context.packer import RECENT_TURN_WINDOW, _dedup_turns, _llm_context_carryover, _messages_to_recent_turns, pack_contexts, resolve_context
 from manufacturing_agent.context.selector import select_context
 from manufacturing_agent.contracts.context import EvidenceArtifact, PredictionResult, SQLHistoryArtifact
 from manufacturing_agent.contracts.state import ManufacturingState
@@ -44,10 +44,11 @@ def context_manager(state: ManufacturingState, config: RunnableConfig = None) ->
     selected["previous_evidence_summary"] = _summary_from_artifact("evidence", prev_ev) or selected.get("previous_evidence_summary")
     selected["previous_sql_summary"] = _summary_from_artifact("sql", prev_sql) or selected.get("previous_sql_summary")
 
-    checkpoint_turns = _messages_to_recent_turns(state.get("messages", []), limit=6)
+    checkpoint_turns = _messages_to_recent_turns(state.get("messages", []), limit=RECENT_TURN_WINDOW)
     if checkpoint_turns:
         selected["recent_turns"] = (selected.get("recent_turns") or []) + checkpoint_turns
-        selected["recent_turns"] = selected["recent_turns"][-8:]
+    # store 턴 + checkpoint 턴 중복 제거 후 윈도우 적용(같은 대화 이중 노출 방지).
+    selected["recent_turns"] = _dedup_turns(selected.get("recent_turns") or [])[-RECENT_TURN_WINDOW:]
     selected["context_carryover"] = _llm_context_carryover(msg, selected)
     selected["context_resolution"] = resolve_context(msg, selected)
     merged, warnings = normalize_context(selected)

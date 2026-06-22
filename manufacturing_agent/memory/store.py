@@ -156,13 +156,14 @@ class ConversationStore:
 
     # --- read ---
     def recent_turns(self, user_id, limit=8, thread_id=None) -> list[dict]:
+        # thread_id가 주어지면 그 대화로만 한정한다(다른 thread 대화 누수 방지).
+        # thread_id가 없을 때만 user 전체에서 조회한다.
         with self._conn() as c:
-            rows = []
             if thread_id:
                 rows = c.execute(
                     "SELECT role,content,created_at FROM turns WHERE user_id=? AND thread_id=? ORDER BY id DESC LIMIT ?",
                     (user_id, thread_id, limit)).fetchall()
-            if not rows:
+            else:
                 rows = c.execute(
                     "SELECT role,content,created_at FROM turns WHERE user_id=? ORDER BY id DESC LIMIT ?",
                     (user_id, limit)).fetchall()
@@ -171,12 +172,11 @@ class ConversationStore:
     def latest_machine_values(self, user_id, thread_id=None) -> dict[str, dict]:
         """Legacy inspection helper. ContextManager는 이 값을 prediction input 보완에 사용하지 않는다."""
         with self._conn() as c:
-            rows = []
             if thread_id:
                 rows = c.execute(
                     "SELECT name,value,unit,created_at FROM machine_values WHERE user_id=? AND thread_id=? ORDER BY id DESC",
                     (user_id, thread_id)).fetchall()
-            if not rows:
+            else:
                 rows = c.execute(
                     "SELECT name,value,unit,created_at FROM machine_values WHERE user_id=? ORDER BY id DESC",
                     (user_id,)).fetchall()
@@ -187,13 +187,13 @@ class ConversationStore:
         return out
 
     def latest_summary(self, user_id, kind, thread_id=None) -> Optional[str]:
+        # thread_id가 주어지면 그 대화로만 한정한다(다른 thread 요약 누수 방지).
         with self._conn() as c:
-            row = None
             if thread_id:
                 row = c.execute(
                     "SELECT content FROM summaries WHERE user_id=? AND thread_id=? AND kind=? ORDER BY id DESC LIMIT 1",
                     (user_id, thread_id, kind)).fetchone()
-            if row is None:
+            else:
                 row = c.execute(
                     "SELECT content FROM summaries WHERE user_id=? AND kind=? ORDER BY id DESC LIMIT 1",
                     (user_id, kind)).fetchone()

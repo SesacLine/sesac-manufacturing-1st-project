@@ -131,11 +131,18 @@ def evidence_agent(state: ManufacturingState) -> dict:
     if feedback:
         summary_system += " 이번은 보완 검색이다. 이전에 부족했던 부분을 중심으로 근거 설명을 확장하라."
     citation_docs = build_citation_aware_docs(docs, citations)
+    # 최근 대화 원문은 요약 생성 LLM에만 참고로 주입한다.
+    # 검색 쿼리(question)에는 넣지 않아 retrieval 임베딩 오염을 막는다.
+    recent_summary = (getattr(ctx, "selected_context", None) or {}).get("recent_summary") or ""
+    conversation_block = (
+        "\n\n[최근 대화 맥락 — 사용자 의도 파악용 참고. 근거 인용은 아래 citation 문서에서만 한다]\n" + recent_summary
+        if recent_summary else ""
+    )
     # prior_context는 이미 question에 포함돼 있으므로 프롬프트에 중복 주입하지 않는다.
     try:
         summary = call_llm(
             summary_system,
-            "질문:" + question
+            "질문:" + question + conversation_block
             + "\n사용 가능한 citation 문서:" + json.dumps(citation_docs, ensure_ascii=False)
         )
         status = "OK"
@@ -601,6 +608,34 @@ def build_sql_history_artifact_from_results(results: list[SQLQueryResult], reaso
         error_message="; ".join(errors) if errors else None,
     )
 
+def _sanitize_time_range(tr: Any, reference_date: str, default_days: int) -> Any:
+    """carryover LLM이 만든 time_range의 절대날짜가 reference_date와 연도가 다르면(환각)
+    윈도우 길이는 보존하되 reference_date 기준으로 재계산한다. 절대날짜가 없으면 기본 윈도우로 보정.
+    (예: '최근 30일'을 LLM이 2023년으로 환각해도 2026 기준 최근 30일로 교정 → 빈 결과 방지)"""
+    import datetime as _d
+    def _parse(v):
+        try:
+            return _d.date.fromisoformat(str(v)[:10])
+        except Exception:
+            return None
+    ref = _parse(reference_date)
+    if ref is None or not isinstance(tr, dict):
+        return tr
+    start = _parse(tr.get("start_date") or tr.get("start"))
+    end = _parse(tr.get("end_date") or tr.get("end"))
+    if start and end:
+        if start.year == ref.year and end.year == ref.year and end <= ref:
+            return tr  # reference 연도와 일치 → 신뢰
+        span = (end - start).days
+        if span <= 0 or span > 3660:
+            span = default_days
+        return {"start_date": (ref - _d.timedelta(days=span)).isoformat(),
+                "end_date": ref.isoformat(),
+                "note": f"원래 값 {tr} 이 기준일과 불일치하여 reference_date 기준 최근 {span}일로 보정"}
+    return {"start_date": (ref - _d.timedelta(days=default_days)).isoformat(),
+            "end_date": ref.isoformat(),
+            "note": f"reference_date 기준 최근 {default_days}일"}
+
 def _build_sql_context_summary(packet: Optional[ContextPacket], state: ManufacturingState) -> str:
     if not packet:
         return ""
@@ -622,7 +657,12 @@ def _build_sql_context_summary(packet: Optional[ContextPacket], state: Manufactu
         pred = state.get("prediction_result")
         blocks.append(f"현재 prediction failure_types: {getattr(pred, 'failure_types', [])}; cause_features: {getattr(pred, 'cause_features', [])}")
     if packet.user_constraints:
-        blocks.append(f"현재 제약/범위: {json.dumps(packet.user_constraints, ensure_ascii=False)}")
+        constraints = dict(packet.user_constraints)
+        if constraints.get("time_range"):
+            constraints["time_range"] = _sanitize_time_range(
+                constraints["time_range"], SQL_REFERENCE_DATE, DEFAULT_SQL_DEPS.default_time_window_days)
+        blocks.append(f"현재 제약/범위: {json.dumps(constraints, ensure_ascii=False)}")
+    blocks.append(f"기준일(reference_date)은 {SQL_REFERENCE_DATE}이다. '최근/지난 N일' 같은 표현은 반드시 이 기준일로 날짜를 계산하라.")
     return "\n".join(blocks)
 
 def sql_agent(state: ManufacturingState, config: RunnableConfig = None) -> dict:

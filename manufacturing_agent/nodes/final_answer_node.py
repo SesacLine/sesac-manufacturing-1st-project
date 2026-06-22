@@ -5,6 +5,12 @@ from manufacturing_agent.contracts.context import ContextPacket, EvidenceArtifac
 from manufacturing_agent.contracts.state import ManufacturingState
 
 # ---------- nodes/final_answer_node.py ----------
+# 답변 생성 전략(하이브리드):
+#   1) 코드가 모든 사실(수치/유형/이력 통계/citation/안전)을 facts sheet로 결정적으로 정리한다.
+#   2) LLM(tier="final")이 그 facts sheet 안에서만 자연스러운 해설 답변을 작성한다.
+#   3) 품질 피드백 + 숫자 hallucination 가드로 검증하고, 1회 보수한다.
+#   4) LLM이 없거나 치명적 문제가 남으면 결정적 폴백 답변으로 안전하게 대체한다.
+#   5) 고장 종류별 정확 수치 블록/체크리스트/[출처]는 코드가 결정적으로 보장 첨부한다(숫자 hallucination 불가).
 def _citation_display_name(citation: dict) -> str:
     import unicodedata
     raw = str(citation.get("title") or citation.get("source") or citation.get("source_id") or "문서 근거")
@@ -76,75 +82,46 @@ def _label_failure_type(name: Any) -> str:
 def _risk_level_ko(level: Any) -> str:
     return {"high": "높음", "medium": "중간", "low": "낮음"}.get(str(level).lower(), str(level))
 
+_SHORT_FT = {"OSF": "과부하", "TWF": "공구마모", "HDF": "열/냉각", "PWF": "전원/구동",
+             "SAFETY_INTERLOCK": "안전 인터록"}
+
+def _short_failure(code: Any) -> str:
+    return _SHORT_FT.get(str(code), _label_failure_type(code))
+
 FINAL_ANSWER_SYSTEM_PROMPT = """
 너는 제조 설비 진단 AI Agent의 최종 답변 작성자다.
 
-너의 역할은 PredictionArtifact, SqlHistoryArtifact, EvidenceArtifact, SafetyArtifact를 바탕으로 사용자가 읽기 쉬운 최종 답변을 작성하는 것이다.
+너의 역할은 아래 facts sheet(현재 위험 진단 요약, 최근 이력 요약, 문서 근거 요약, 안전 판단 요약, 정확 수치 근거)를
+바탕으로, 현장 작업자가 바로 읽고 판단할 수 있는 하나의 자연스러운 답변을 작성하는 것이다.
 
-중요한 원칙은 다음과 같다.
-- 사용자는 디버그 로그가 아니라 현장 판단에 도움이 되는 답변을 원한다.
-- artifact, SQL row, JSON, 내부 state, raw chunk, debug log를 그대로 출력하지 않는다.
-- 내부 점수(score), query_type, SQL, raw component code(tooling, drive_system 등)를 출력하지 않는다. 필요한 경우 한국어로 풀어쓴다.
-- 단, 진단·이력의 실제 측정/계산값(토크, 공구마모, 공기온도, 공정온도, 온도차, 회전속도, 전력, 고장 건수, 다운타임 분 등)은 0~1 내부 점수가 아니므로 반드시 실제 단위값으로 본문에 구체적으로 녹여 써라. 예: "토크 62 N·m, 공구마모 215분으로 과부하·공구마모 위험", "최근 30일 10건, 총 다운타임 420분".
-- 여러 결과를 단순히 이어붙이지 말고, 하나의 자연스러운 진단 답변으로 종합한다.
-- 답변은 3~5개 짧은 섹션으로 제한하고, 불필요한 4단계 제목(####)이나 긴 보고서식 문단을 피한다.
-- 모든 요청에 같은 섹션을 강제로 붙이지 않는다. answer_mode와 section_guidance를 따른다.
-- 현재 위험 진단 결과가 없으면 위험이 없다고 말하지 않는다. “현재 위험 진단은 별도로 수행되지 않았고, 최근 이력 기준 주의 신호를 요약한다”고 표현한다.
-- 위험 진단 artifact가 없으면 제목은 요청 의도에 맞게 “과거 고장 이력 요약” 또는 “점검 요약”처럼 조정한다.
-- Prediction 결과를 과도하게 단정하지 않는다.
-- 현재 위험 진단 요약이 "입력 부족:"으로 시작할 때만 [입력 부족] 섹션을 만든다. 입력이 충분한 경우에는 [입력 부족]을 절대 쓰지 않는다.
-- 문서 근거가 부족한 내용은 단정하지 말고 “확인 필요”, “근거 부족”, “추가 점검 필요”라고 표현한다.
+핵심 원칙:
+- 디버그 로그가 아니라 현장 판단에 도움이 되는 답변을 쓴다. 여러 결과를 단순히 이어붙이지 말고 하나의 진단 답변으로 종합한다.
+- facts sheet 안의 정보만 사용한다. 없는 정보는 추정하지 말고 "확인 필요", "근거 부족", "추가 점검 필요"로 표현한다.
+- 숫자(토크, 공구마모, 온도, 회전속도, 건수, 다운타임, 비율, 임계값 등)는 facts sheet와 '정확 수치 근거'에 있는 값만 쓴다.
+  새로운 숫자·계산식·임계값을 절대 지어내지 마라.
+- 진단·이력의 실제 측정/계산값은 0~1 내부 점수가 아니므로 본문에 실제 단위값으로 구체적으로 녹여 쓴다.
+  예: "토크 62 N·m, 공구마모 215분으로 과부하·공구마모 위험", "최근 30일 10건, 총 다운타임 420분".
+- 내부 점수(score), query_type, SQL, raw component code(tooling, drive_system 등)는 출력하지 않는다. 필요하면 한국어로 풀어 쓴다.
+- 답변은 3~5개의 짧은 섹션으로 제한한다. markdown # heading marker(####)나 긴 보고서식 문단을 쓰지 않고, 짧은 일반 섹션 제목을 쓴다.
+- answer_mode와 section_guidance를 따른다. 모든 요청에 같은 섹션을 강제로 붙이지 않는다.
+- 현재 위험 진단 결과가 없으면 "위험 없음"이라고 단정하지 말고, "현재 위험 진단은 별도로 수행되지 않았고 최근 이력 기준 주의 신호를 요약한다"고 표현한다.
+- 현재 위험 진단 요약이 "입력 부족:"으로 시작할 때만 입력 부족을 안내한다. 입력이 충분하면 입력 부족 표현을 쓰지 않는다.
+- 문서 citation이 있으면 관련 문장에 [C1], [C2] 형식으로 인용하고, 없는 근거를 새로 만들지 않는다.
+
+자동 첨부(중요):
+- '고장 종류별 근거(규칙/계산/영향 변수)' 표와 '지금 점검할 일' 체크리스트, '[출처]'는 시스템이 정확한 수치로 본문 뒤에 자동 첨부한다.
+- 너는 그 표/체크리스트를 직접 만들지 말고, 본문에서는 핵심 해석과 가장 먼저 할 일을 자연어로 설명만 하라.
+- 맨 앞 '종합 판단' 한 줄 상태 표시도 시스템이 자동으로 붙이므로 너는 따로 만들지 마라.
+
+안전 원칙:
 - 위험한 운전 지속, 경보 무시, 안전장치 해제, LOTO 생략, 무자격 정비를 허용하지 않는다.
-- 운전 조건 변경이나 테스트 수행은 직접 지시하지 말고, 승인된 절차와 담당자 판단 하에 검토할 항목으로 표현한다.
-- 실제 정지, 재가동, 정비 승인 여부는 현장 안전 책임자와 설비 담당자가 판단해야 한다고 안내한다.
-- 사용자가 요청하지 않은 내부 처리 과정, 라우팅 경로, Agent 이름, DB 조회 로그는 설명하지 않는다.
-- 답변은 한국어로 작성하고, 현장 작업자가 이해할 수 있게 간결하게 쓴다.
+- 운전 조건 변경이나 테스트 수행을 직접 지시하지 말고, 승인된 절차와 담당자 판단 하에 검토할 항목으로 표현한다.
+- 정지/재가동/정비 승인 여부는 현장 안전 책임자와 설비 담당자가 판단해야 한다고 안내한다.
+- 내부 처리 과정, 라우팅 경로, Agent 이름, DB 조회 로그는 설명하지 않는다.
 
-출력 형식은 answer_mode에 맞춰 조정한다.
-
-제목은 사용자 질문과 answer_context에 맞춰 자연스럽게 작성한다.
-- prediction과 SQL 이력이 모두 있으면: 입력 피처 기반 위험 진단과 과거 고장 이력 요약
-- SQL 이력만 있으면: 과거 고장 이력 요약
-- prediction만 있으면: 입력 피처 기반 위험 진단 요약
-- 문서 근거만 있으면: 점검 문서 근거 요약
-- 사용자가 구체 대상을 명시하지 않았으면 “장비”, “대상 설비”, “최근 설비에서” 같은 빈 표현을 쓰지 않는다.
-- SQL 이력만 있는 경우에는 “최근 설비에서 발생한” 대신 “최근 고장 이력에서 확인된”처럼 failure_history 기준으로 표현한다.
-- 답변 대상이 “과거 고장 이력” 또는 “입력 피처와 과거 고장 이력”이면 구체 설비명이 없는 상태다. 이때 “이 설비”, “해당 설비”, “최근 설비에서”라는 표현을 쓰지 말고 “최근 고장 이력에서”, “조회된 고장 사례에서”라고 쓴다.
-
-SQL_ONLY 모드:
-- 현재 위험 진단이 없다는 설명을 길게 쓰지 않는다.
-- “현재 판단”, “지금 점검할 일”, “문서 근거” 섹션을 만들지 않는다.
-- 조회 결과 요약 → 반복 패턴/대응 방식 → 해석상 주의사항 순서로 쓰고, 700자 내외로 간결하게 작성한다.
-
-COMBINED 모드:
-- 현재 위험 진단 → 최근 이력 요약 → 지금 점검할 일 → 문서 근거 → 주의사항 순서로 쓴다.
-- 문서 citation이 있으면 본문에 [C1], [C2]처럼 표시한다.
-
-첫 문단에는 answer_mode에 맞는 결론을 2~3문장으로 작성한다. 현재 위험 진단이 있는 경우에만 현재 위험 수준을 말한다.
-
-현재 위험 진단(prediction)이 있을 때:
-- 첫 2~3문장으로 위험 수준과 감지된 고장 종류, 가장 먼저 확인할 것을 자연어로 요약한다(예: "위험 높음 — 과부하·공구마모. 공구 상태와 토크부터 확인하세요").
-- 고장 종류별 '규칙/계산/영향 변수' 표와 '지금 점검할 일' 체크리스트는 시스템이 정확한 수치로 자동 첨부한다. 너는 그 표/체크리스트를 직접 만들지 말고, 숫자(계산식·임계값·비율)도 새로 만들지 마라.
-- 문서 근거가 있으면 관련 문장에 [C1] 형식으로 인용해 해석을 덧붙인다.
-
-최근 이력 요약
-- failure_history에서 조회된 고장 유형, 원인, 대응 조치, 반복 패턴만 bullet로 정리한다.
-- SQL row 원문을 그대로 나열하지 않는다.
-- 개별 row가 필요하더라도 최대 2개 이하의 예시만 요약 형태로 언급한다.
-
-지금 점검할 일
-- 사용자가 바로 실행할 수 있는 점검 순서를 3~5개로 작성한다.
-- 공구, 스핀들, 쿨런트, 절삭 조건, 안전 확인 항목을 필요한 경우 포함한다.
-- 위험한 직접 조작이나 안전 절차 생략을 지시하지 않는다.
-
-문서 근거
-- 문서 근거가 있는 경우 citation id를 포함해 작성한다. 예: [C1], [C2]
-- 문서 근거가 부족한 경우에는 억지로 citation을 만들지 말고 “현재 검색된 문서 근거만으로는 단정하기 어렵습니다”라고 작성한다.
-
-주의사항
-- 진단 보조 한계, 현장 확인 필요성, 정지/재가동/정비 승인 주체를 간단히 안내한다.
-
-최종 출력에는 자기검토 과정은 포함하지 말고, 사용자에게 보여줄 답변만 작성한다.
+답변은 한국어로 작성하고, 현장 작업자가 이해할 수 있게 간결하게 쓴다.
+첫 문단에는 answer_mode에 맞는 결론을 2~3문장으로 쓴다(현재 위험 진단이 있을 때만 현재 위험 수준을 말한다).
+최종 출력에는 자기검토 과정을 포함하지 말고, 사용자에게 보여줄 답변 본문만 작성하라.
 """.strip()
 
 FINAL_ANSWER_USER_PROMPT = """
@@ -153,10 +130,10 @@ FINAL_ANSWER_USER_PROMPT = """
 
 답변 대상:
 {equipment_id}
-(답변 대상은 내부 요약 기준이다. 제목에 그대로 복사하지 말고 자연스러운 한국어 제목으로 바꿔라.)
+(답변 대상은 내부 요약 기준이다. 제목에 그대로 복사하지 말고 자연스러운 한국어 제목으로 바꿔라.
+ 구체 설비명이 없으면 "이 설비", "해당 설비", "최근 설비에서" 같은 표현 대신 "최근 고장 이력에서", "조회된 고장 사례에서"라고 쓴다.)
 
-아래는 최종 답변 생성을 위해 정리된 answer_context이다.
-이 정보 안에서만 답변하라. 없는 정보는 추정하지 말고 “확인 필요”라고 표현하라.
+아래 facts sheet 안에서만 답변하라. 없는 정보는 추정하지 말고 "확인 필요"라고 표현하라.
 
 [답변 모드]
 {answer_mode}
@@ -176,11 +153,14 @@ FINAL_ANSWER_USER_PROMPT = """
 [안전 판단 요약]
 {safety_summary}
 
+[정확 수치 근거(이 수치만 사용; 시스템이 표로 자동 첨부하므로 본문에서는 해석만)]
+{diagnosis_block}
+
 [사용 가능한 Citation 목록]
 {citations}
 
-위 정보를 바탕으로 사용자에게 보여줄 최종 답변만 작성하라.
-artifact 이름, SQL row, JSON, 내부 처리 과정은 출력하지 마라.
+위 정보를 바탕으로 사용자에게 보여줄 최종 답변 본문만 작성하라.
+artifact 이름, SQL row, JSON, 내부 처리 과정, score 값은 출력하지 마라.
 """.strip()
 
 def _answer_equipment_id(state: ManufacturingState, sql: Optional[SQLHistoryArtifact], packet: Optional[ContextPacket]) -> str:
@@ -241,7 +221,6 @@ def _prediction_summary_for_answer(pred: Optional[PredictionResult], machine_val
                  f"(영향: {', '.join(_label_feature(x) for x in (r.get('contributing_features') or [])) or '확인 필요'})"
                  for r in pred.risk_flags]
         lines.append("감지된 위험: " + ", ".join(brief))
-        lines.append("(고장 종류별 계산식·점검 체크리스트는 시스템이 정확한 수치로 자동 첨부하므로 본문에서 표로 반복하지 말 것)")
     if pred.context_mode in {"PATCH_ACTIVE", "USE_ACTIVE", "SELECT_HISTORY"}:
         if pred.changed_features:
             lines.append("변경 입력: " + ", ".join(_label_feature(x) for x in pred.changed_features))
@@ -405,12 +384,13 @@ def _section_guidance_for_answer(mode: str, ev: Optional[EvidenceArtifact], cita
         return (
             "최근 고장 이력 조회 답변이다. 섹션은 '조회 결과 요약', '반복 패턴/대응 방식', '해석상 주의사항'만 사용한다. "
             "현재 판단, 지금 점검할 일, 문서 근거 섹션은 만들지 않는다. "
-            "점검 권고를 하더라도 SQL 이력에서 확인된 조치 패턴 수준으로만 표현한다."
+            "점검 권고를 하더라도 SQL 이력에서 확인된 조치 패턴 수준으로만 표현한다. 700자 내외로 간결하게 작성한다."
         )
     if mode in {"COMBINED", "PREDICTION_WITH_EVIDENCE"}:
         return (
-            "현재 위험 진단, 최근 이력 요약, 지금 점검할 일, 문서 근거, 주의사항 순서로 작성한다. "
-            "문서 citation이 있으면 본문에 [C1] 형태로 표시하고, 없는 문서 근거를 새로 만들지 않는다."
+            "현재 위험 진단 → 최근 이력 요약 → 지금 점검할 일 → 문서 근거 → 주의사항 순서로 작성한다. "
+            "문서 citation이 있으면 본문에 [C1] 형태로 표시하고, 없는 문서 근거를 새로 만들지 않는다. "
+            "단, '고장 종류별 근거' 표와 '지금 점검할 일' 체크리스트는 시스템이 자동 첨부하므로 본문에서는 해석만 덧붙인다."
         )
     if mode == "PREDICTION_ONLY":
         return "입력 피처 기반 위험 진단과 필요한 추가 입력/현장 확인만 작성한다. 과거 이력이나 문서 근거 섹션은 만들지 않는다."
@@ -485,6 +465,25 @@ def _ensure_diagnosis_block(answer: str, pred: Optional[PredictionResult]) -> st
         out += "\n\n" + checklist
     return out
 
+def _verdict_banner(pred, sql, ev) -> str:
+    """답변 맨 앞 한 줄 종합 판단(결정적)."""
+    if pred and getattr(pred, "status", None) == "NEEDS_INPUT":
+        return "ℹ️ 종합 판단: 입력 부족 — 정확한 진단을 위해 추가 데이터가 필요합니다."
+    if pred and pred.risk_flags:
+        levels = [str(r.get("level", "")).lower() for r in pred.risk_flags]
+        lv, emo = ("높음", "🔴") if "high" in levels else ("중간", "🟡") if "medium" in levels else ("낮음", "🟢")
+        types = [_short_failure(r.get("failure_type")) for r in pred.risk_flags
+                 if str(r.get("level", "")).lower() in {"high", "medium"}]
+        ts = " · ".join(dict.fromkeys(types)) or "주의 신호"
+        return f"{emo} 종합 판단: 위험 {lv} — {ts}"
+    if pred and getattr(pred, "status", None) in {"OK", "PARTIAL"}:
+        return "🟢 종합 판단: 입력 기준 뚜렷한 고위험 신호 없음"
+    if sql is not None:
+        return "🗂 종합 판단: 과거 고장 이력 요약"
+    if ev is not None:
+        return "📄 종합 판단: 점검 문서 근거 요약"
+    return "ℹ️ 종합 판단"
+
 def build_answer_context(state: ManufacturingState) -> dict:
     pred = state.get("prediction_result")
     ev = state.get("evidence_bundle")
@@ -495,6 +494,8 @@ def build_answer_context(state: ManufacturingState) -> dict:
     machine_values = packet.selected_machine_values if packet else None
     prediction_summary = _prediction_summary_for_answer(pred, machine_values) if pred else "이번 답변 모드에서는 현재 위험 진단 섹션을 만들지 않는다."
     evidence_summary = _evidence_summary_for_answer(ev) if ev else "이번 요청에서 문서 근거 artifact가 없으므로 문서 근거 섹션을 만들지 않는다."
+    diagnosis_block = _render_diagnosis_block(pred)
+    checklist_block = _render_checklist(pred)
     return {
         "user_question": state.get("user_message", ""),
         "equipment_id": _answer_equipment_id(state, sql, packet),
@@ -504,26 +505,86 @@ def build_answer_context(state: ManufacturingState) -> dict:
         "history_summary": _history_summary_for_answer(sql),
         "evidence_summary": evidence_summary,
         "safety_summary": _safety_summary_for_answer(state, pred),
+        "diagnosis_block": diagnosis_block or "해당 없음(현재 위험 진단 수치 없음)",
+        "checklist_block": checklist_block,
         "citations": _citation_list_for_answer(citations),
     }
 
-def _fallback_final_answer(ctx: dict) -> str:
-    title = _answer_title_from_context(ctx)
-    if ctx.get("answer_mode") == "SQL_ONLY":
-        return (
-            f"{title}\n\n"
-            f"조회 결과 요약\n- {ctx['history_summary']}\n\n"
-            "해석상 주의사항\n- 이 요약은 저장된 failure_history 샘플 이력 기준입니다. 실제 정비 판단은 현장 점검과 담당자 승인 기준으로 확인해야 합니다."
-        )
-    return (
-        f"{title}\n\n"
-        f"현재 확인된 정보 기준으로 종합하면 다음과 같습니다. 단, 일부 판단은 추가 현장 확인이 필요합니다.\n\n"
-        f"현재 판단\n- {ctx['prediction_summary']}\n\n"
-        f"최근 이력 요약\n- {ctx['history_summary']}\n\n"
-        "지금 점검할 일\n1. 공구 마모와 체결 상태를 확인합니다.\n2. 스핀들 진동, 온도, 런아웃을 확인합니다.\n3. 쿨런트 유량과 필터 상태를 확인합니다.\n4. 절삭 조건을 완화해 재현 여부를 확인합니다.\n5. 안전 절차와 담당자 승인 없이 재가동을 단정하지 않습니다.\n\n"
-        f"문서 근거\n- {ctx['evidence_summary']}\n\n"
-        f"주의사항\n- {ctx['safety_summary']}"
+# ---------- 품질/숫자 가드 ----------
+def _final_answer_quality_feedback(ctx: dict, answer: str) -> list[str]:
+    issues: list[str] = []
+    mode = ctx.get("answer_mode")
+    if mode == "SQL_ONLY":
+        banned_sections = ["현재 판단", "지금 점검할 일", "문서 근거"]
+        leaked = [s for s in banned_sections if s in answer]
+        if leaked:
+            issues.append("SQL_ONLY 답변에는 다음 섹션을 만들지 마세요: " + ", ".join(leaked))
+    if re.search(r"\bscore\b|점수\s*\(?\d", answer, re.I):
+        issues.append("내부 score/점수 값을 노출하지 말고 높음/중간/낮음 정도로 표현하세요.")
+    _leak_terms = list(COMPONENT_LABELS) + [t for t in FEATURE_LABELS if t != "type"]
+    raw_terms = [t for t in _leak_terms if re.search(rf"\b{re.escape(t)}\b", answer)]
+    if raw_terms:
+        issues.append("raw schema 용어를 한국어 현장 용어로 풀어 쓰세요: " + ", ".join(sorted(set(raw_terms))[:6]))
+    if ctx.get("citations") != "사용 가능한 citation 없음" and not re.search(r"\[C\d+\]", answer):
+        issues.append("사용 가능한 citation이 있으면 관련 문장에 [C1] 형식으로 표시하세요.")
+    if not ctx.get("prediction_summary", "").startswith("입력 부족:") and "입력 부족" in answer:
+        issues.append("입력 부족 상태가 아니므로 [입력 부족] 섹션이나 표현을 제거하세요.")
+    if re.search(r"(?m)^\s*#{1,6}\s+", answer):
+        issues.append("markdown # heading marker를 쓰지 말고 짧은 일반 섹션 제목으로 작성하세요.")
+    if re.search(r"조정하여\s*테스트|바로\s*재가동|계속\s*운전", answer):
+        issues.append("운전 조건 변경이나 테스트 수행을 직접 지시하지 말고 승인된 절차에서 검토할 항목으로 표현하세요.")
+    return issues
+
+_UNIT_NUM_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(N·m|Nm|rpm|RPM|K|℃|분|건|%|mm|시간|회)")
+
+def _allowed_numbers(ctx: dict) -> set[str]:
+    """facts sheet에 등장한 모든 수치 토큰. LLM 본문 수치는 이 집합 안에 있어야 한다."""
+    allowed: set[str] = set()
+    for key in ("prediction_summary", "history_summary", "evidence_summary",
+                "safety_summary", "diagnosis_block", "checklist_block", "citations"):
+        allowed |= set(re.findall(r"\d+(?:\.\d+)?", ctx.get(key, "") or ""))
+    return allowed
+
+def _number_guard(answer: str, allowed: set[str]) -> list[str]:
+    """단위가 붙은 수치(토크/온도/건수/다운타임 등)가 facts sheet에 없으면 hallucination으로 본다.
+    단위 없는 일반 숫자·목록 번호는 오탐 위험이 커서 검사하지 않는다."""
+    issues: list[str] = []
+    for m in _UNIT_NUM_RE.finditer(answer or ""):
+        tok = m.group(1)
+        if tok in allowed:
+            continue
+        if "." not in tok and len(tok) <= 1:   # 목록 번호 등 한 자리 숫자
+            continue
+        issues.append(f"number_hallucination:{m.group(0).strip()} → facts sheet에 없는 수치이니 제거하거나 facts 값으로 교체하세요.")
+        if len(issues) >= 5:
+            break
+    return issues
+
+# ---------- 후처리 ----------
+def _ensure_citations_visible(answer: str, citations: list[dict]) -> str:
+    if not citations:
+        return answer
+    if "[출처]" in answer:
+        answer = re.split(r"\n\s*\[출처\]\s*", answer, maxsplit=1)[0].rstrip()
+    return answer.rstrip() + "\n\n" + _format_citations(citations[:6])
+
+def _ensure_missing_input_visible(answer: str, missing_inputs: list[str]) -> str:
+    if not missing_inputs:
+        return answer
+    if "입력 부족" in answer or ("입력" in answer and any(term in answer for term in ["부족", "확인 필요", "추가 정보", "추가 입력"])):
+        return answer
+    missing_text = ", ".join(_label_feature(name) for name in missing_inputs)
+    prefix = (
+        "[입력 부족]\n"
+        f"이번 질문에서 제공된 값만으로는 전체 위험 진단이 제한됩니다. 추가 입력이 필요합니다: {missing_text}.\n\n"
     )
+    return prefix + answer.lstrip()
+
+def _remove_false_missing_input_section(answer: str, missing_inputs: list[str]) -> str:
+    if missing_inputs or "입력 부족" not in answer:
+        return answer
+    cleaned = re.sub(r"\n?\[입력 부족\]\s*\n.*?(?=\n(?:#{1,3}\s|[가-힣A-Za-z ]{2,20}\n)|\Z)", "\n", answer, flags=re.S).strip()
+    return cleaned or answer
 
 def _localize_answer_terms(answer: str) -> str:
     out = answer
@@ -550,55 +611,24 @@ def _clean_final_answer_format(answer: str) -> str:
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
 
-
-def _final_answer_quality_feedback(ctx: dict, answer: str) -> list[str]:
-    issues: list[str] = []
-    mode = ctx.get("answer_mode")
-    if mode == "SQL_ONLY":
-        banned_sections = ["현재 판단", "지금 점검할 일", "문서 근거"]
-        leaked = [s for s in banned_sections if s in answer]
-        if leaked:
-            issues.append("SQL_ONLY 답변에는 다음 섹션을 만들지 마세요: " + ", ".join(leaked))
-    if re.search(r"\bscore\b|점수\s*\(?\d", answer, re.I):
-        issues.append("내부 score/점수 값을 노출하지 말고 높음/중간/낮음 정도로 표현하세요.")
-    _leak_terms = list(COMPONENT_LABELS) + [t for t in FEATURE_LABELS if t != "type"]
-    raw_terms = [t for t in _leak_terms if re.search(rf"\b{re.escape(t)}\b", answer)]
-    if raw_terms:
-        issues.append("raw schema 용어를 한국어 현장 용어로 풀어 쓰세요: " + ", ".join(sorted(set(raw_terms))[:6]))
-    if ctx.get("citations") != "사용 가능한 citation 없음" and not re.search(r"\[C\d+\]", answer):
-        issues.append("사용 가능한 citation이 있으면 관련 문장에 [C1] 형식으로 표시하세요.")
-    if ctx.get("prediction_summary", "").startswith("입력 부족:") is False and "입력 부족" in answer:
-        issues.append("입력 부족 상태가 아니므로 [입력 부족] 섹션이나 표현을 제거하세요.")
-    if re.search(r"(?m)^\s*#{1,6}\s+", answer):
-        issues.append("markdown # heading marker를 쓰지 말고 짧은 일반 섹션 제목으로 작성하세요.")
-    if re.search(r"조정하여\s*테스트|바로\s*재가동|계속\s*운전", answer):
-        issues.append("운전 조건 변경이나 테스트 수행을 직접 지시하지 말고 승인된 절차에서 검토할 항목으로 표현하세요.")
-    return issues
-
-def _ensure_citations_visible(answer: str, citations: list[dict]) -> str:
-    if not citations:
-        return answer
-    if "[출처]" in answer:
-        answer = re.split(r"\n\s*\[출처\]\s*", answer, maxsplit=1)[0].rstrip()
-    return answer.rstrip() + "\n\n" + _format_citations(citations[:6])
-
-def _ensure_missing_input_visible(answer: str, missing_inputs: list[str]) -> str:
-    if not missing_inputs:
-        return answer
-    if "입력 부족" in answer or ("입력" in answer and any(term in answer for term in ["부족", "확인 필요", "추가 정보", "추가 입력"])):
-        return answer
-    missing_text = ", ".join(_label_feature(name) for name in missing_inputs)
-    prefix = (
-        "[입력 부족]\n"
-        f"이번 질문에서 제공된 값만으로는 전체 위험 진단이 제한됩니다. 추가 입력이 필요합니다: {missing_text}.\n\n"
-    )
-    return prefix + answer.lstrip()
-
-def _remove_false_missing_input_section(answer: str, missing_inputs: list[str]) -> str:
-    if missing_inputs or "입력 부족" not in answer:
-        return answer
-    cleaned = re.sub(r"\n?\[입력 부족\]\s*\n.*?(?=\n(?:#{1,3}\s|[가-힣A-Za-z ]{2,20}\n)|\Z)", "\n", answer, flags=re.S).strip()
-    return cleaned or answer
+def _fallback_final_answer(ctx: dict) -> str:
+    """LLM 합성이 불가하거나 검증 실패 시의 결정적 답변. 숫자는 facts sheet 값만 사용한다."""
+    title = _answer_title_from_context(ctx)
+    if ctx.get("answer_mode") == "SQL_ONLY":
+        return (
+            f"{title}\n\n"
+            f"조회 결과 요약\n{ctx['history_summary']}\n\n"
+            "해석상 주의사항\n- 이 요약은 저장된 failure_history 샘플 이력 기준입니다. 실제 정비 판단은 현장 점검과 담당자 승인 기준으로 확인해야 합니다."
+        )
+    parts = [title, "현재 확인된 정보 기준으로 종합하면 다음과 같습니다. 단, 일부 판단은 추가 현장 확인이 필요합니다."]
+    if not ctx.get("prediction_summary", "").startswith("이번 답변 모드"):
+        parts.append("현재 판단\n" + ctx["prediction_summary"])
+    if ctx.get("history_summary") and ctx["history_summary"] != "확인된 최근 이력 없음":
+        parts.append("최근 이력 요약\n" + ctx["history_summary"])
+    if not ctx.get("evidence_summary", "").startswith("이번 요청에서 문서 근거"):
+        parts.append("문서 근거\n" + ctx["evidence_summary"])
+    parts.append("주의사항\n" + ctx["safety_summary"])
+    return "\n\n".join(parts)
 
 def _mark_final_task_pass(state: ManufacturingState) -> dict:
     plan = state.get("execution_plan")
@@ -613,85 +643,38 @@ def _mark_final_task_pass(state: ManufacturingState) -> dict:
             changed = True
     return {"execution_plan": plan.model_copy(update={"tasks": tasks})} if changed else {}
 
-_SHORT_FT = {"OSF": "과부하", "TWF": "공구마모", "HDF": "열/냉각", "PWF": "전원/구동",
-             "SAFETY_INTERLOCK": "안전 인터록"}
+_SAFETY_TRAILER_RISK = "⚠ 규칙 기반 보조 진단이며, 정지·재가동·정비 승인 여부는 현장 안전 책임자와 설비 담당자가 판단해야 합니다."
+_SAFETY_TRAILER_INFO = "ℹ 보조 진단·조회 결과이며, 실제 조치는 현장 담당자 확인이 필요합니다."
 
-def _short_failure(code: Any) -> str:
-    return _SHORT_FT.get(str(code), _label_failure_type(code))
+def _ensure_safety_trailer(answer: str, has_risk: bool) -> str:
+    trailer = _SAFETY_TRAILER_RISK if has_risk else _SAFETY_TRAILER_INFO
+    core = "현장 안전 책임자" if has_risk else "현장 담당자 확인"
+    if core in answer:
+        return answer
+    return answer.rstrip() + "\n\n" + trailer
 
-def _verdict_banner(pred, sql, ev) -> str:
-    """답변 맨 앞 한 줄 종합 판단(결정적)."""
-    if pred and getattr(pred, "status", None) == "NEEDS_INPUT":
-        return "ℹ️ 종합 판단: 입력 부족 — 정확한 진단을 위해 추가 데이터가 필요합니다."
-    if pred and pred.risk_flags:
-        levels = [str(r.get("level", "")).lower() for r in pred.risk_flags]
-        lv, emo = ("높음", "🔴") if "high" in levels else ("중간", "🟡") if "medium" in levels else ("낮음", "🟢")
-        types = [_short_failure(r.get("failure_type")) for r in pred.risk_flags
-                 if str(r.get("level", "")).lower() in {"high", "medium"}]
-        ts = " · ".join(dict.fromkeys(types)) or "주의 신호"
-        return f"{emo} 종합 판단: 위험 {lv} — {ts}"
-    if pred and getattr(pred, "status", None) in {"OK", "PARTIAL"}:
-        return "🟢 종합 판단: 입력 기준 뚜렷한 고위험 신호 없음"
-    if sql is not None:
-        return "🗂 종합 판단: 과거 고장 이력 요약"
-    if ev is not None:
-        return "📄 종합 판단: 점검 문서 근거 요약"
-    return "ℹ️ 종합 판단"
-
-def _missing_block(pred) -> str:
-    if not (pred and getattr(pred, "status", None) == "NEEDS_INPUT"):
-        return ""
-    miss = ", ".join(_label_feature(x) for x in (pred.missing_features or [])) or "추가 입력값"
-    return ("추가로 필요한 입력\n"
-            f"현재 입력만으로는 정확한 진단이 어렵습니다. 다음 값을 입력해 주세요: {miss}")
-
-def _history_block(sql) -> str:
-    if sql is None:
-        return ""
-    body = _history_summary_for_answer(sql)
-    if not body:
-        return ""
-    return "과거 고장 이력\n" + body
-
-def _evidence_block(ev) -> str:
-    if not ev:
-        return ""
-    status = getattr(ev, "status", None)
-    if status == "OK" and ev.evidence_summary:
-        _parts = [p.strip() for p in ev.evidence_summary.split("\n") if p.strip()]
-        _cited = [p for p in _parts if "[C" in p][:4]
-        return "문서 근거\n" + ("\n".join(_cited) if _cited else ev.evidence_summary[:600])
-    if status == "LOW_RELEVANCE":
-        body = ev.evidence_summary or "검색된 문서의 관련성이 낮아 단정하기 어렵습니다."
-        return "문서 근거\n" + body + "\n(관련성이 낮아 참고용입니다. 추가 문서 확인이 필요합니다.)"
-    if status == "EMPTY":
-        return "문서 근거\n현재 검색된 문서 근거만으로는 단정하기 어렵습니다."
-    return ""  # FAIL → 섹션 생략
-
-HEADLINE_SYS = (
-    "너는 제조 진단 답변의 첫 요약 문장 작성자다. 주어진 진단/이력/문서 요지를 바탕으로, "
-    "사용자가 가장 먼저 알아야 할 핵심과 가장 먼저 할 일을 1~2문장으로만 쓴다. "
-    "표·수치 나열·체크리스트·섹션 제목은 쓰지 마라(뒤에 시스템이 정확한 수치로 붙인다). "
-    "위험한 실행 지시(점검 없이 재가동 등)는 절대 하지 말고, 단정 대신 '확인 필요'·'점검 필요'로 표현한다. "
-    "한국어 1~2문장만 출력하라."
-)
-
-def _headline(pred, sql, ev, user_q: str) -> str:
-    facts = []
-    if pred and pred.risk_flags:
-        top = pred.risk_flags[0]
-        facts.append(f"진단: {_short_failure(top.get('failure_type'))} 등 위험 {_risk_level_ko(top.get('level'))}")
-    elif pred and getattr(pred, "status", None) == "NEEDS_INPUT":
-        facts.append("진단: 입력 부족으로 추가 데이터 필요")
-    if sql is not None:
-        facts.append("과거 고장 이력 조회됨")
-    if ev is not None and getattr(ev, "status", None) in {"OK", "LOW_RELEVANCE"}:
-        facts.append("관련 문서 근거 있음")
+def _synthesize_answer(ctx: dict, allowed_numbers: set[str]) -> tuple[str, list[str]]:
+    """LLM(tier=final) 합성 → 품질/숫자 가드 → 1회 보수. (answer, 남은 issues) 반환.
+    LLM 사용 불가/빈 응답이면 ('', [사유])."""
+    user_prompt = FINAL_ANSWER_USER_PROMPT.format(**ctx)
     try:
-        out = call_llm(HEADLINE_SYS, json.dumps({"질문": user_q, "요지": facts}, ensure_ascii=False), tier="default").strip()
-        return out.split("\n")[0].strip() if out else ""
-    except Exception:
-        return ""
+        answer = call_llm(FINAL_ANSWER_SYSTEM_PROMPT, user_prompt, tier="final").strip()
+    except Exception as e:
+        return "", [f"llm_error:{type(e).__name__}"]
+    if not answer:
+        return "", ["empty_answer"]
+    issues = _final_answer_quality_feedback(ctx, answer) + _number_guard(answer, allowed_numbers)
+    if issues:
+        repair_prompt = user_prompt + "\n\n[수정 지시 — 아래 문제를 모두 고쳐 다시 작성하라]\n- " + "\n- ".join(issues)
+        try:
+            repaired = call_llm(FINAL_ANSWER_SYSTEM_PROMPT, repair_prompt, tier="final").strip()
+            if repaired:
+                issues2 = _final_answer_quality_feedback(ctx, repaired) + _number_guard(repaired, allowed_numbers)
+                if len(issues2) <= len(issues):
+                    answer, issues = repaired, issues2
+        except Exception:
+            pass
+    return answer, issues
 
 def final_answer_node(state: ManufacturingState) -> dict:
     # Intake Gate 차단 시: 차단 메시지를 그대로 최종 답변으로 반환
@@ -714,31 +697,31 @@ def final_answer_node(state: ManufacturingState) -> dict:
     missing = pred.missing_features if (pred and pred.status == "NEEDS_INPUT") else []
     citations = ev.citations if ev and ev.status in {"OK", "LOW_RELEVANCE"} else []
 
-    # ===== 결정적 조립형 답변 틀 =====
-    # 수치/판단은 코드가 고정 위치에 렌더하고, LLM은 헤드라인 1~2문장만 담당한다.
-    sections = [_verdict_banner(pred, sql, ev)]
-    headline = _headline(pred, sql, ev, state.get("user_message", ""))
-    if headline:
-        sections.append(headline)
-    for block in (
-        _missing_block(pred),
-        _render_diagnosis_block(pred),   # 현재 위험 진단 (규칙/계산/영향 변수)
-        _history_block(sql),             # 과거 고장 이력 (건수/유형/다운타임)
-        _evidence_block(ev),             # 문서 근거 (citation-aware)
-        _render_checklist(pred),         # 지금 점검할 일
-        _format_citations(citations),    # [출처]
-    ):
-        if block:
-            sections.append(block)
-    _has_risk = bool(pred and pred.risk_flags and any(str(r.get("level", "")).lower() in {"high", "medium"} for r in pred.risk_flags))
-    if _has_risk:
-        sections.append("⚠ 규칙 기반 보조 진단이며, 정지·재가동·정비 승인 여부는 현장 안전 책임자와 설비 담당자가 판단해야 합니다.")
-    else:
-        sections.append("ℹ 보조 진단·조회 결과이며, 실제 조치는 현장 담당자 확인이 필요합니다.")
+    # ===== facts sheet → LLM 해설 합성(+가드) → 검증 실패 시 결정적 폴백 =====
+    ctx = build_answer_context(state)
+    allowed_numbers = _allowed_numbers(ctx)
+    body, issues = _synthesize_answer(ctx, allowed_numbers)
+    used_fallback = False
+    # 본문이 비었거나(LLM 불가) 숫자 hallucination이 남으면 결정적 폴백으로 안전하게 대체한다.
+    if (not body) or any(i.startswith("number_hallucination") for i in issues):
+        body = _fallback_final_answer(ctx)
+        used_fallback = True
+        if issues:
+            warnings.append("final_answer_fallback: " + "; ".join(i.split(":")[0] for i in issues)[:200])
 
-    answer = _clean_final_answer_format(_localize_answer_terms("\n\n".join(s for s in sections if s)))
+    # ===== 후처리: 입력부족 정합 → 정확 수치 블록 보장 → 현지화/정리 → 안전 트레일러 → 종합 판단 배너 → [출처] =====
+    body = _remove_false_missing_input_section(body, missing)
+    body = _ensure_missing_input_visible(body, missing)
+    body = _ensure_diagnosis_block(body, pred)   # 고장 종류별 근거/체크리스트를 정확 수치로 보장
+    _has_risk = bool(pred and pred.risk_flags and any(str(r.get("level", "")).lower() in {"high", "medium"} for r in pred.risk_flags))
+    body = _ensure_safety_trailer(body, _has_risk)
+
+    answer = _verdict_banner(pred, sql, ev) + "\n\n" + body
+    answer = _clean_final_answer_format(_localize_answer_terms(answer))
+    answer = _ensure_citations_visible(answer, citations)
+
     fa = FinalAnswer(answer=answer, citations=citations, warnings=warnings, missing_inputs=missing)
     updates = _mark_final_task_pass(state)
     updates["final_answer"] = fa
     return updates
-print("final_answer_node artifact synthesis 정의 완료")
+print("final_answer_node hybrid(LLM 해설 + 결정적 수치 보장 + 폴백) 정의 완료")

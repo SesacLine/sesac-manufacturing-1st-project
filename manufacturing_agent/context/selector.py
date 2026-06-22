@@ -1,6 +1,7 @@
 from __future__ import annotations
 from manufacturing_agent._common import *  # noqa: F401,F403
 from manufacturing_agent.config import *  # noqa: F401,F403
+from manufacturing_agent.context.packer import RECENT_TURN_WINDOW
 from manufacturing_agent.context.policy import detect_injection, extract_machine_values
 from manufacturing_agent.memory.store import ConversationStore
 
@@ -15,7 +16,8 @@ def select_context(user_message: str, user_id: str, store: ConversationStore,
     nl_vals = extract_machine_values(user_message)
     structured = structured or {}
     current_vals = {**nl_vals, **structured}
-    recent = store.recent_turns(user_id, limit=6, thread_id=thread_id)
+    # 사용자 질문을 윈도우 내 전부 보존하기 위해 넉넉히 가져온다(요약 단계에서 user_all 정책 적용).
+    recent = store.recent_turns(user_id, limit=RECENT_TURN_WINDOW, thread_id=thread_id)
     clean_recent = [t for t in recent if not detect_injection(t["content"])]
     active_context = store.get_active_context(user_id, thread_id) if thread_id else None
     recent_contexts = store.get_recent_contexts(user_id, thread_id, limit=5) if thread_id else []

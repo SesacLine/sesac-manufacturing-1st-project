@@ -20,8 +20,42 @@ def _messages_to_recent_turns(messages: list, limit: int = 6) -> list[dict]:
         turns.append({"role": role, "content": str(content), "created_at": "checkpoint"})
     return turns[-limit:]
 
-def _summarize_recent_turns(turns: list[dict], limit: int = 6, chars: int = 120) -> str:
-    return " | ".join(f"{t['role']}:{str(t['content']).replace(chr(10), ' ')[:chars]}" for t in turns[-limit:])
+# 멀티턴 대화 윈도우 정책:
+# - 사용자 질문은 의도 추적에 중요하므로 윈도우 안에서 전부 유지한다.
+# - AI 답변은 원문이 길어 토큰을 많이 쓰므로 최근 ASSISTANT_TURN_LIMIT개만 유지한다.
+# - RECENT_TURN_WINDOW는 상류에서 가져오는 최근 대화 턴 상한(폭주 방지용 안전 한도)이다.
+RECENT_TURN_WINDOW = 50
+ASSISTANT_TURN_LIMIT = 4
+
+def _dedup_turns(turns: list[dict]) -> list[dict]:
+    """(role, content) 기준 중복 제거, 첫 등장 순서 보존.
+    store 턴과 checkpoint(messages) 턴이 같은 대화를 중복 제공하는 것을 막는다."""
+    seen: set = set()
+    out: list[dict] = []
+    for t in turns or []:
+        key = (t.get("role"), str(t.get("content")))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(t)
+    return out
+
+def _summarize_recent_turns(turns: list[dict], limit: int = 6, chars: Optional[int] = None,
+                            *, user_all: bool = False, assistant_limit: Optional[int] = ASSISTANT_TURN_LIMIT) -> str:
+    """최근 대화를 'role:content' 한 줄 형태로 이어붙인다.
+    chars=None(기본)이면 원문 전체를 자르지 않고 그대로 넣는다(개행만 공백으로 평탄화).
+    user_all=True이면 사용자(user) 턴은 모두 유지하고, AI(assistant) 답변만 최근 assistant_limit개로 제한한다(순서 보존)."""
+    seq = list(turns or [])
+    if user_all:
+        assistant_idx = [i for i, t in enumerate(seq) if t.get("role") == "assistant"]
+        keep = set(assistant_idx) if assistant_limit is None else set(assistant_idx[-assistant_limit:])
+        selected = [t for i, t in enumerate(seq) if t.get("role") != "assistant" or i in keep]
+    else:
+        selected = seq[-limit:]
+    def _body(content: Any) -> str:
+        text = str(content).replace(chr(10), " ")
+        return text if chars is None else text[:chars]
+    return " | ".join(f"{t['role']}:{_body(t['content'])}" for t in selected)
 
 CONTEXT_CARRYOVER_SYS = (
     "너는 제조업 멀티턴 Agent의 컨텍스트 해석기다. 현재 사용자 발화가 이전 대화나 이전 artifact를 참조하는지 판단한다. "
@@ -36,7 +70,7 @@ CONTEXT_CARRYOVER_SYS = (
 )
 
 def _llm_context_carryover(user_message: str, selected: dict) -> ContextCarryoverDecision:
-    recent_summary = _summarize_recent_turns(selected.get("recent_turns") or [], limit=8, chars=180)
+    recent_summary = _summarize_recent_turns(selected.get("recent_turns") or [], user_all=True)
     payload = {
         "current_user_message": user_message,
         "recent_turns_summary": recent_summary,
@@ -119,7 +153,7 @@ def _llm_context_resolution(user_message: str, selected: dict) -> ContextResolut
         "current_values_extracted_from_this_turn": selected.get("current_values") or {},
         "active_context": _context_brief(selected.get("active_context")),
         "recent_contexts": [_context_brief(c) for c in (selected.get("recent_contexts") or [])],
-        "recent_turns_summary": _summarize_recent_turns(selected.get("recent_turns") or [], limit=8, chars=160),
+        "recent_turns_summary": _summarize_recent_turns(selected.get("recent_turns") or [], user_all=True),
         "previous_prediction_summary_available": bool(selected.get("previous_prediction_summary")),
         "previous_sql_summary_available": bool(selected.get("previous_sql_summary")),
         "previous_evidence_summary_available": bool(selected.get("previous_evidence_summary")),
@@ -223,7 +257,7 @@ def resolve_context(user_message: str, selected: dict) -> ContextResolution:
 def pack_contexts(user_message: str, merged: dict[str, MachineValue],
                   selected: dict, warnings: list[str]) -> tuple[ContextPacket, dict[str, AgentContextPacket]]:
     """ContextPacket + Agent별 AgentContextPacket 생성."""
-    recent_summary = _summarize_recent_turns(selected.get("recent_turns") or [])
+    recent_summary = _summarize_recent_turns(selected.get("recent_turns") or [], user_all=True)
     carry = selected.get("context_carryover") or ContextCarryoverDecision()
     prior_results = {
         "prediction_summary": selected.get("previous_prediction_summary"),
