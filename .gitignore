@@ -6,12 +6,28 @@ dist/
 wheels/
 *.egg-info
 
+
 # Virtual environments
 .venv
 
 # Agent runtime data (SQLite 메모리/체크포인트, Chroma 벡터스토어)
 agent_data/
+*.sqlite
+*.db
 
 # Secrets — 키를 커밋하지 마세요
 .env
+*.env
+.env.*
 
+# Personal Space
+personal_space/
+
+
+# 편집기·OS 메타
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 용량 큰 문서 원본 (필요 시)
+# document/
