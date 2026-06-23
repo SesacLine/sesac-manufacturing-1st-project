@@ -316,8 +316,19 @@ def _evidence_block(ev) -> str:
     status = getattr(ev, "status", None)
     if status == "OK" and ev.evidence_summary:
         _parts = [p.strip() for p in ev.evidence_summary.split("\n") if p.strip()]
-        _cited = [p for p in _parts if "[C" in p][:4]
-        return "[문서 근거]\n" + ("\n".join(_cited) if _cited else ev.evidence_summary[:600])
+        _cited = [p for p in _parts if "[C" in p]
+        _bullets = [p for p in _parts if p.startswith("•") or p.startswith("-")]
+        if _cited:
+            # citation 있는 줄 우선, 3개 미만이면 나머지 bullet로 보충 (최대 5개)
+            selected = _cited[:5]
+            if len(selected) < 3:
+                extra = [p for p in _bullets if p not in _cited]
+                selected = (selected + extra)[:5]
+        elif _bullets:
+            selected = _bullets[:5]
+        else:
+            return "[문서 근거]\n" + ev.evidence_summary[:400]
+        return "[문서 근거]\n" + "\n".join(selected)
     if status == "LOW_RELEVANCE":
         body = ev.evidence_summary or "검색된 문서의 관련성이 낮아 단정하기 어렵습니다."
         return "[문서 근거]\n" + body + "\n(관련성이 낮아 참고용입니다. 추가 문서 확인이 필요합니다.)"
