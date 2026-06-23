@@ -6,6 +6,7 @@ from manufacturing_agent.agents.sql_agent import DEFAULT_SQL_DEPS, validate_sql_
 from manufacturing_agent.contracts.context import FinalAnswer, GateReport, OutputSafetyDecision
 from manufacturing_agent.contracts.state import ManufacturingState
 from manufacturing_agent.gates.intake_gate import SAFETY_BLOCK_MESSAGE
+from manufacturing_agent.gates.patterns import OUTPUT_FORBIDDEN_PATTERNS, SAFE_NEGATION
 from manufacturing_agent.util import _coerce_bool, _json_object, append_gate_report
 
 # ---------- gates/prediction_gate.py ----------
@@ -162,13 +163,6 @@ def _normalize_output_safety_payload(data: dict) -> dict:
         "warnings": [str(x) for x in warnings],
     }
 
-OUTPUT_FORBIDDEN_PATTERNS = [
-    r"점검\s*(없이|전에?|안\s*하고)\s*(재?가동|기동|운전).{0,20}(해도\s*(됩니다|된다|돼)|하세요|하라|가능|승인|계속)",
-    r"안전\s*장치\S*\s*(우회|해제|끄|꺼|무시).{0,30}(하세요|하라|해도|됩니다|가능|운전|계속|진행)",
-    r"(경고|알람|위험)\s*\S*\s*무시.{0,30}(가동|운전|계속|진행|하세요|하라)",
-]
-
-_SAFE_NEGATION = re.compile(r"피하|하지\s*마|마라|마세요|말아|금지|않|불가|위험|안\s*됩니다|안\s*돼|삼가|자제|주의")
 def _contains_unsafe_execution_instruction(answer: str) -> bool:
     """위험 실행 '지시'만 잡는다. 매치 주변에 부정/경고어가 있으면 안전 권고로 보고 통과(오차단 방지)."""
     if not answer:
@@ -176,7 +170,7 @@ def _contains_unsafe_execution_instruction(answer: str) -> bool:
     for p in OUTPUT_FORBIDDEN_PATTERNS:
         for m in re.finditer(p, answer, re.I | re.S):
             seg = answer[max(0, m.start() - 12): m.end() + 12]
-            if _SAFE_NEGATION.search(seg):
+            if SAFE_NEGATION.search(seg):
                 continue
             return True
     return False

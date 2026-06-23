@@ -5,6 +5,7 @@ from manufacturing_agent.context.packer import RECENT_TURN_WINDOW, _messages_to_
 from manufacturing_agent.context.policy import detect_injection
 from manufacturing_agent.contracts.context import GateReport, InputDecision, InputFlags, IntakeDecision
 from manufacturing_agent.contracts.state import ManufacturingState
+from manufacturing_agent.gates.patterns import CONTROL_COMMAND_PATTERN, FORBIDDEN_PATTERNS
 from manufacturing_agent.util import _coerce_bool, _json_object
 
 # ---------- gates/intake_gate.py (single LLM intake · service + request safety) ----------
@@ -27,12 +28,6 @@ BLOCK_MESSAGES = {
     "human_handoff": "이 요청은 현장 안전 책임자 또는 설비 담당자의 확인이 필요합니다. 저는 실제 조치·승인을 대신할 수 없습니다.",
 }
 
-FORBIDDEN_PATTERNS = [
-    r"점검\s*(없이|전에?|안\s*하고)\s*(재?가동|기동|운전)",
-    r"안전\s*장치\S*\s*(우회|해제|끄|꺼|무시).*(돌려|가동|운전|진행|해)",
-    r"(경고|알람|위험)\s*\S*\s*무시.*(가동|운전|계속|진행)",
-    r"(재가동|기동|가동)\s*\S*\s*(강행|밀어붙|그냥\s*(해|진행))",
-]
 def _is_forbidden_action(msg: str) -> bool:
     if not msg:
         return False
@@ -142,7 +137,7 @@ def intake_gate(state: ManufacturingState) -> dict:
     flags = InputFlags(
         is_empty=(not has_text and not has_fields),
         is_injection=detect_injection(msg),
-        is_control_command=bool(re.search(r"가동|재가동|기동|운전|정지|승인|우회|해제|LOTO", msg, re.I)),
+        is_control_command=bool(re.search(CONTROL_COMMAND_PATTERN, msg, re.I)),
         is_manufacturing=True,
     )
 
