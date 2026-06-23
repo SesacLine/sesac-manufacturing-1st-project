@@ -216,12 +216,8 @@ def _fanout_queries(plan: dict) -> list[str]:
 #(2) Retriever------------------------------
 def retrieve_stage(plan: dict, k: int = 16, top_k: int = 4, debug: Optional[dict] = None) -> list[dict]:
     """
-<<<<<<< Updated upstream
-    Retriever.
-    Query Builder가 생성한 Search Plan을 이용하여 Pinecone에서 문서를 검색한다.
-=======
     Retriever (Query Fan-out + Priority Search + Merge + Fallback).
->>>>>>> Stashed changes
+    vector_search 백엔드(Pinecone/Chroma)에서 fan-out query로 문서를 검색한다.
 
     수행 과정
         1. taxonomy fan-out query 각각에 대해 Vector Search (profile type filter 적용)
@@ -454,9 +450,6 @@ def rag_search(question: str, profile: str, prediction: Optional[PredictionResul
           사용자에게는 담당자 확인 안내를 노출한다.
     """
     plan = build_query(question, profile, prediction)   # (1)
-<<<<<<< Updated upstream
-    hits = retrieve_stage(plan, k=retrieve_k)             # (2)
-=======
     debug: dict[str, Any] = {
         "features": plan.get("features"),
         "failure_types": plan.get("failure_types"),
@@ -465,7 +458,6 @@ def rag_search(question: str, profile: str, prediction: Optional[PredictionResul
         "queries": _fanout_queries(plan),
     }
     hits = retrieve_stage(plan, k=retrieve_k, top_k=top_k, debug=debug)  # (2) fan-out + priority + fallback
->>>>>>> Stashed changes
     ranked = rank_evidence(hits, top_k=top_k)            # (3)
     relevant = [d for d in ranked if float(d.get("score", 0.0)) >= MIN_EVIDENCE_SCORE]
 

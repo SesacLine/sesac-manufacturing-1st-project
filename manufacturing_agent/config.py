@@ -61,6 +61,16 @@ LONGTERM_DB = os.path.join(DATA_DIR, "longterm_memory.sqlite")   # 장기 메모
 CHECKPOINT_DB = os.path.join(DATA_DIR, "checkpoints.sqlite")     # 장기 체크포인터(SqliteSaver)
 CHROMA_DIR = os.path.join(DATA_DIR, "chroma")                    # 벡터 스토어
 
+# ---- 벡터 백엔드 (chroma | pinecone) ----
+# rag_service는 vector_search를 import해 쓰며, 백엔드 전환은 이 설정과 import 경로로만 결정된다.
+VECTOR_BACKEND = os.environ.get("VECTOR_BACKEND", "chroma").lower()
+PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY", "")
+PINECONE_INDEX_NAME = os.environ.get("PINECONE_INDEX_NAME", "sesacline-agent-docs")
+PINECONE_CLOUD = os.environ.get("PINECONE_CLOUD", "aws")
+PINECONE_REGION = os.environ.get("PINECONE_REGION", "us-east-1")
+# text-embedding-3-small=1536, text-embedding-3-large=3072 (Pinecone 인덱스 차원과 일치해야 함)
+EMBED_DIM = int(os.environ.get("OPENAI_EMBED_DIM", "1536"))
+
 # 오케스트레이션/검색 튜닝 노브 (.env로 override 가능)
 RECURSION_LIMIT      = int(os.environ.get("RECURSION_LIMIT", "50"))      # LangGraph 실행 스텝 상한
 TASK_MAX_RETRIES     = int(os.environ.get("TASK_MAX_RETRIES", "2"))      # worker gate RETRYABLE_FAIL 재시도 예산
@@ -93,6 +103,9 @@ def support_contact_text() -> str:
 RAG_DEBUG = os.environ.get("RAG_DEBUG", "false").lower() in {"1", "true", "yes", "on"}
 
 _HAS_KEY = bool(os.environ.get("OPENAI_API_KEY"))
+print("Vector backend:", VECTOR_BACKEND)
+if VECTOR_BACKEND == "pinecone":
+    print("Pinecone index:", PINECONE_INDEX_NAME, "| API key:", "OK" if PINECONE_API_KEY else "MISSING")
 
 _LANGSMITH_ENABLED = LANGSMITH_TRACING.lower() in {"1", "true", "yes", "on"}
 _LANGSMITH_HAS_KEY = bool(os.environ.get("LANGSMITH_API_KEY"))
