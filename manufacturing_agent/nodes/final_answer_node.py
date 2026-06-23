@@ -20,29 +20,48 @@ def _citation_display_name(citation: dict) -> str:
     name = unicodedata.normalize("NFC", name).replace("_", " ").strip() or "문서 근거"
     return name[:90].rstrip() + ("..." if len(name) > 90 else "")
 
+def _readable_snippet(raw: Any) -> Optional[str]:
+    """raw HTML/공백 손상 PDF 추출물은 비개발자에게 안 읽히므로 가독성 있을 때만 노출한다."""
+    snippet = re.sub(r"\s+", " ", str(raw or "")).strip()
+    if not snippet:
+        return None
+    ascii_ratio = sum(ch.isascii() for ch in snippet) / max(len(snippet), 1)
+    space_ratio = snippet.count(" ") / max(len(snippet), 1)
+    if ascii_ratio < 0.5 and space_ratio > 0.03:
+        return snippet[:180].rstrip() + ("…" if len(snippet) > 180 else "")
+    return None
+
 def _format_citations(citations: list[dict]) -> str:
     if not citations:
         return ""
-    lines = ["[출처]"]
-    for idx, c in enumerate(citations[:6], start=1):
+    # 같은 문서의 여러 chunk/인용을 한 항목으로 묶는다(동일 문서가 [출처]에 중복 나열되는 것을 방지).
+    docs: dict[str, dict] = {}
+    order: list[str] = []
+    for idx, c in enumerate(citations, start=1):
         cid = c.get("citation_id") or f"C{idx}"
-        title = _citation_display_name(c)
         source = str(c.get("source") or c.get("source_id") or "").strip()
+        key = source or _citation_display_name(c)
+        slot = docs.get(key)
+        if slot is None:
+            slot = docs[key] = {"ids": [], "title": _citation_display_name(c), "source": source, "chunks": [], "snippet": None}
+            order.append(key)
+        if cid not in slot["ids"]:
+            slot["ids"].append(cid)
         chunk = c.get("chunk_index")
-        lines.append(f"- [{cid}] 문서: {title}")
-        if source:
-            lines.append(f"  - 원본: {source}")
-        if chunk is not None:
-            lines.append(f"  - 위치: chunk={chunk}")
-        snippet = re.sub(r"\s+", " ", str(c.get("snippet") or "")).strip()
-        if snippet:
-            ascii_ratio = sum(ch.isascii() for ch in snippet) / max(len(snippet), 1)
-            space_ratio = snippet.count(" ") / max(len(snippet), 1)
-            # 영어 raw HTML/공백 손상 PDF 추출물은 비개발자에게 안 읽히므로 가독성 있을 때만 노출
-            if ascii_ratio < 0.5 and space_ratio > 0.03:
-                if len(snippet) > 180:
-                    snippet = snippet[:180].rstrip() + "…"
-                lines.append(f"  - 원문 근거: {snippet}")
+        if chunk is not None and chunk not in slot["chunks"]:
+            slot["chunks"].append(chunk)
+        if slot["snippet"] is None:
+            slot["snippet"] = _readable_snippet(c.get("snippet"))
+    lines = ["[출처]"]
+    for key in order[:6]:
+        d = docs[key]
+        lines.append(f"- [{', '.join(d['ids'])}] 문서: {d['title']}")
+        if d["source"]:
+            lines.append(f"  - 원본: {d['source']}")
+        if d["chunks"]:
+            lines.append(f"  - 위치: chunk={', '.join(str(x) for x in d['chunks'])}")
+        if d["snippet"]:
+            lines.append(f"  - 원문 근거: {d['snippet']}")
     return "\n".join(lines)
 
 FEATURE_LABELS = {
@@ -144,7 +163,7 @@ FINAL_ANSWER_USER_PROMPT = """
 [현재 위험 진단 요약]
 {prediction_summary}
 
-[최근 이력 요약]
+[최근 이력 — 검증된 수치(이 숫자만 사용, 표현·구성은 네가 자연스럽게)]
 {history_summary}
 
 [문서 근거 요약]
@@ -251,68 +270,20 @@ def _to_int(value: Any, default: int = 0) -> int:
     except Exception:
         return default
 
-def _history_result_summary(query_type: Optional[str], rows: list[dict], status: str) -> str:
-    qtype = query_type or "history"
-    if not rows:
-        return "• 조건에 맞는 이력 없음"
-    if qtype in {"similar_incidents", "failure_history"}:
-        failure_types = Counter(_short_failure(r.get("failure_type")) for r in rows if r.get("failure_type"))
-        components = Counter(_label_component(r.get("component")) for r in rows if r.get("component"))
-        actions = []
-        for row in rows:
-            a = str(row.get("corrective_action") or "").strip()
-            if a and a not in actions:
-                actions.append(a)
-            if len(actions) >= 3:
-                break
-        downtimes = [_to_int(r.get("downtime_min"), 0) for r in rows if str(r.get("downtime_min") or "").strip() not in ("", "None")]
-        head = f"총 {len(rows)}건"
-        if downtimes:
-            head += f" · 다운타임 {sum(downtimes)}분(평균 {round(sum(downtimes) / len(downtimes))}분)"
-        lines = [head,
-                 f"• 유형: {_format_counter(failure_types)}",
-                 f"• 영역: {_format_counter(components)}"]
-        samples = _sample_failure_rows(rows[:3])
-        if samples:
-            lines.append("• 대표 사례:")
-            lines.extend(f"   - {s}" for s in samples)
-        if actions:
-            lines.append("• 대표 조치: " + " · ".join(actions))
-        preventions = []
-        for row in rows:
-            p = str(row.get("preventive_action") or "").strip()
-            if p and p not in preventions:
-                preventions.append(p)
-            if len(preventions) >= 3:
-                break
-        if preventions:
-            lines.append("• 재발 방지: " + " · ".join(preventions))
-        return "\n".join(lines)
-    if qtype == "corrective_actions":
-        items = []
-        for row in rows:
-            it = f"{_short_failure(row.get('failure_type'))}: {row.get('corrective_action')} (예방: {row.get('preventive_action')})"
-            if it not in items:
-                items.append(it)
-            if len(items) >= 4:
-                break
-        return "유형별 대응 방식\n" + "\n".join(f"• {it}" for it in items)
-    if qtype == "repeated_patterns":
-        grouped: dict[str, dict[str, Any]] = {}
-        for row in rows:
-            ft = _short_failure(row.get("failure_type"))
-            slot = grouped.setdefault(ft, {"cases": 0, "downtime": 0, "components": Counter()})
-            slot["cases"] += _to_int(row.get("case_count"), 1)
-            slot["downtime"] += _to_int(row.get("total_downtime_min"), 0)
-            if row.get("component"):
-                slot["components"][_label_component(row.get("component"))] += _to_int(row.get("case_count"), 1)
-        patterns = []
-        for ft, data in sorted(grouped.items(), key=lambda kv: (-kv[1]["cases"], -kv[1]["downtime"], kv[0]))[:5]:
-            patterns.append(f"{ft}: {data['cases']}건 · 다운타임 {data['downtime']}분 · 주요 영역 {_format_counter(data['components'], limit=2)}")
-        return "반복 패턴\n" + "\n".join(f"• {p}" for p in patterns) if patterns else f"• {len(rows)}건 조회됨"
-    return f"• {len(rows)}건 조회됨"
+def _dedup_take(values, limit: int) -> list[str]:
+    """빈 값 제거 + 중복 제거하며 순서 보존으로 최대 limit개를 취한다."""
+    out: list[str] = []
+    for v in values:
+        s = str(v or "").strip()
+        if s and s not in out:
+            out.append(s)
+        if len(out) >= limit:
+            break
+    return out
 
-def _history_summary_for_answer(sql: Optional[SQLHistoryArtifact]) -> str:
+def _history_facts(sql: Optional[SQLHistoryArtifact]) -> str:
+    """SQL 이력에서 '정확한 수치'만 결정적으로 추출한 검증 facts(verified numbers).
+    문장 구조/섹션/표현은 최종 답변 LLM이 담당한다 — 여기서는 숫자 환각만 차단한다(고정 틀 없음)."""
     if not sql:
         return "확인된 최근 이력 없음"
     if sql.status == "INVALID_REQUEST":
@@ -321,28 +292,50 @@ def _history_summary_for_answer(sql: Optional[SQLHistoryArtifact]) -> str:
         return "조건에 맞는 과거 이력은 조회되지 않음"
     if sql.status in {"BLOCKED", "FAIL"}:
         return "이력 조회 실패 또는 정책 차단: " + (sql.error_message or sql.summary or "확인 필요")
-    lines = []
+
+    detail_rows: list[dict] = []
+    agg_rows: list[dict] = []
     results = getattr(sql, "results", []) or []
     if results:
-        by_type = {}
         for r in results:
-            by_type.setdefault(r.query_type, r)
-        primary = by_type.get("failure_history") or by_type.get("similar_incidents")
-        if primary:
-            lines.append(_history_result_summary(primary.query_type, primary.rows or [], primary.status))
-        if "repeated_patterns" in by_type:
-            rp = by_type["repeated_patterns"]
-            lines.append(_history_result_summary("repeated_patterns", rp.rows or [], rp.status))
-        if not primary and "corrective_actions" in by_type:
-            ca = by_type["corrective_actions"]
-            lines.append(_history_result_summary("corrective_actions", ca.rows or [], ca.status))
+            (agg_rows if r.query_type == "aggregate" else detail_rows).extend(r.rows or [])
     elif sql.rows:
-        lines.append(_history_result_summary(sql.query_type, sql.rows, sql.status))
-    else:
-        lines.append(sql.summary or "조건에 맞는 이력 없음")
+        (agg_rows if sql.query_type == "aggregate" else detail_rows).extend(sql.rows)
+
+    facts: list[str] = []
+    if detail_rows:
+        facts.append(f"조회된 고장 사례: {len(detail_rows)}건")
+        downtimes = [_to_int(r.get("downtime_min"), 0) for r in detail_rows
+                     if str(r.get("downtime_min") or "").strip() not in ("", "None")]
+        if downtimes:
+            facts.append(f"다운타임 합계 {sum(downtimes)}분, 평균 {round(sum(downtimes) / len(downtimes))}분")
+        facts.append("고장 유형 분포: " + _format_counter(Counter(_short_failure(r.get("failure_type")) for r in detail_rows if r.get("failure_type"))))
+        facts.append("영향 영역 분포: " + _format_counter(Counter(_label_component(r.get("component")) for r in detail_rows if r.get("component"))))
+        samples = _sample_failure_rows(detail_rows[:3])
+        if samples:
+            facts.append("대표 사례: " + " / ".join(samples))
+        actions = _dedup_take((r.get("corrective_action") for r in detail_rows), 3)
+        if actions:
+            facts.append("확인된 대응 조치: " + " · ".join(actions))
+        preventions = _dedup_take((r.get("preventive_action") for r in detail_rows), 3)
+        if preventions:
+            facts.append("재발 방지 조치: " + " · ".join(preventions))
+    if agg_rows:
+        grouped: dict[str, dict[str, Any]] = {}
+        for row in agg_rows:
+            ft = _short_failure(row.get("failure_type"))
+            slot = grouped.setdefault(ft, {"cases": 0, "downtime": 0, "components": Counter()})
+            slot["cases"] += _to_int(row.get("case_count"), 1)
+            slot["downtime"] += _to_int(row.get("total_downtime_min"), 0)
+            if row.get("component"):
+                slot["components"][_label_component(row.get("component"))] += _to_int(row.get("case_count"), 1)
+        for ft, data in sorted(grouped.items(), key=lambda kv: (-kv[1]["cases"], -kv[1]["downtime"], kv[0]))[:5]:
+            facts.append(f"{ft} 집계: {data['cases']}건, 다운타임 {data['downtime']}분, 주요 영역 {_format_counter(data['components'], limit=2)}")
+    if not facts:
+        facts.append(sql.summary or "조건에 맞는 이력 없음")
     if sql.limitations:
-        lines.append("조회 한계: " + "; ".join(sql.limitations[:3]))
-    return "\n".join(lines)
+        facts.append("조회 한계: " + "; ".join(sql.limitations[:3]))
+    return "\n".join(facts)
 
 def _citation_list_for_answer(citations: list[dict]) -> str:
     if not citations:
@@ -382,8 +375,9 @@ def _answer_mode(pred: Optional[PredictionResult], sql: Optional[SQLHistoryArtif
 def _section_guidance_for_answer(mode: str, ev: Optional[EvidenceArtifact], citations: list[dict]) -> str:
     if mode == "SQL_ONLY":
         return (
-            "최근 고장 이력 조회 답변이다. 섹션은 '조회 결과 요약', '반복 패턴/대응 방식', '해석상 주의사항'만 사용한다. "
-            "현재 판단, 지금 점검할 일, 문서 근거 섹션은 만들지 않는다. "
+            "최근 고장 이력 조회 답변이다. 제공된 '검증된 수치'를 바탕으로 자연스럽게 서술한다. "
+            "고정된 섹션 틀이나 불릿 양식을 강제하지 말고, 핵심 수치(건수·다운타임·유형 분포·대표 조치)와 해석상 주의사항을 자연스러운 흐름으로 담는다. "
+            "현재 위험 진단·지금 점검할 일·문서 근거 섹션은 만들지 않는다. "
             "점검 권고를 하더라도 SQL 이력에서 확인된 조치 패턴 수준으로만 표현한다. 700자 내외로 간결하게 작성한다."
         )
     if mode in {"COMBINED", "PREDICTION_WITH_EVIDENCE"}:
@@ -393,7 +387,11 @@ def _section_guidance_for_answer(mode: str, ev: Optional[EvidenceArtifact], cita
             "단, '고장 종류별 근거' 표와 '지금 점검할 일' 체크리스트는 시스템이 자동 첨부하므로 본문에서는 해석만 덧붙인다."
         )
     if mode == "PREDICTION_ONLY":
-        return "입력 피처 기반 위험 진단과 필요한 추가 입력/현장 확인만 작성한다. 과거 이력이나 문서 근거 섹션은 만들지 않는다."
+        return (
+            "입력 피처 기반 위험 진단을 해설한다. 정확한 수치 근거와 점검 항목은 시스템이 본문 뒤에 정확한 값으로 따로 정리해 붙인다. "
+            "그러니 본문에서는 표·번호 목록·섹션 제목을 직접 만들지 말고, 같은 계산식·수치를 반복하지 마라. "
+            "무엇이 왜 위험한지와 가장 먼저 할 일을 2~4문장으로 자연스럽게 설명한다. 과거 이력이나 문서 근거 섹션은 만들지 않는다."
+        )
     if mode == "EVIDENCE_ONLY":
         return "문서 근거와 점검 절차 중심으로 작성한다. 현재 위험 진단이나 과거 이력 섹션은 만들지 않는다."
     if mode == "HISTORY_WITH_EVIDENCE":
@@ -458,10 +456,12 @@ def _ensure_diagnosis_block(answer: str, pred: Optional[PredictionResult]) -> st
         return answer
     out = (answer or "").rstrip()
     block = _render_diagnosis_block(pred)
-    if block and "고장 종류별 근거" not in out:
+    # 이미 렌더된 근거표가 있을 때만 건너뛴다. 헤딩 문구가 아니라 '렌더 전용 마커(영향 변수 :)'로 판정해야
+    # LLM이 본문에서 섹션명을 언급해도 실제 표가 누락되지 않는다.
+    if block and "영향 변수 :" not in out:
         out += "\n\n" + block
     checklist = _render_checklist(pred)
-    if checklist and "지금 점검할 일" not in out:
+    if checklist and checklist not in out:
         out += "\n\n" + checklist
     return out
 
@@ -502,7 +502,7 @@ def build_answer_context(state: ManufacturingState) -> dict:
         "answer_mode": mode,
         "section_guidance": _section_guidance_for_answer(mode, ev, citations),
         "prediction_summary": prediction_summary,
-        "history_summary": _history_summary_for_answer(sql),
+        "history_summary": _history_facts(sql),
         "evidence_summary": evidence_summary,
         "safety_summary": _safety_summary_for_answer(state, pred),
         "diagnosis_block": diagnosis_block or "해당 없음(현재 위험 진단 수치 없음)",
@@ -564,9 +564,15 @@ def _number_guard(answer: str, allowed: set[str]) -> list[str]:
 def _ensure_citations_visible(answer: str, citations: list[dict]) -> str:
     if not citations:
         return answer
+    # 본문에서 실제 인용된 [C#]만 출처로 노출한다(인용 안 된 문서 나열 방지). 하나도 매칭 안 되면 전체로 폴백.
+    used = set(re.findall(r"\[(C\d+)\]", answer))
+    if used:
+        cited = [c for c in citations if (c.get("citation_id") or "") in used]
+        if cited:
+            citations = cited
     if "[출처]" in answer:
         answer = re.split(r"\n\s*\[출처\]\s*", answer, maxsplit=1)[0].rstrip()
-    return answer.rstrip() + "\n\n" + _format_citations(citations[:6])
+    return answer.rstrip() + "\n\n" + _format_citations(citations)
 
 def _ensure_missing_input_visible(answer: str, missing_inputs: list[str]) -> str:
     if not missing_inputs:

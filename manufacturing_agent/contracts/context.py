@@ -19,7 +19,8 @@ ContextMode = Literal[
 ]
 
 # SQL 이력 조회 query type 집합(단일 출처). planner/evidence_agent가 공유한다.
-SQL_QUERY_TYPES = ("similar_incidents", "failure_history", "corrective_actions", "repeated_patterns")
+# detail = 개별 고장 사례 행 단위 조회(유사 사례·대응 조치 포함), aggregate = GROUP BY 집계(반복 패턴·다운타임 통계).
+SQL_QUERY_TYPES = ("detail", "aggregate")
 
 class DiagnosisContext(BaseModel):
     """진단에 실제 사용된 feature 묶음의 재사용 가능한 snapshot."""
@@ -163,14 +164,14 @@ class SupervisorPlannerDecision(BaseModel):
     needs_evidence: bool = False
     needs_sql: bool = False
     evidence_required: bool = False
-    sql_query_intents: list[Literal["similar_incidents", "failure_history", "corrective_actions", "repeated_patterns"]] = Field(default_factory=list)
+    sql_query_intents: list[Literal["detail", "aggregate"]] = Field(default_factory=list)
     evidence_focus: list[str] = Field(default_factory=list)
     reason_summary: str = ""
     confidence: float = 0.0
 
 class SQLIntentDecision(BaseModel):
     """SQL Agent 실행 전 LLM이 판단한 정형 이력 조회 의도."""
-    query_types: list[Literal["similar_incidents", "failure_history", "corrective_actions", "repeated_patterns"]] = Field(default_factory=list)
+    query_types: list[Literal["detail", "aggregate"]] = Field(default_factory=list)
     failure_type: Optional[str] = None
     time_range: Optional[dict] = None
     filters: dict = Field(default_factory=dict)
@@ -207,7 +208,7 @@ class EvidenceArtifact(BaseModel):
 EvidenceBundle = EvidenceArtifact
 
 class SQLQueryResult(BaseModel):
-    query_type: Literal["similar_incidents", "failure_history", "corrective_actions", "repeated_patterns"]
+    query_type: Literal["detail", "aggregate"]
     status: Literal["OK", "EMPTY", "INVALID_REQUEST", "BLOCKED", "FAIL"] = "EMPTY"
     sql: Optional[str] = None
     rows: list[dict] = Field(default_factory=list)
@@ -217,7 +218,7 @@ class SQLQueryResult(BaseModel):
 
 class SQLHistoryArtifact(BaseModel):
     status: Literal["OK", "EMPTY", "INVALID_REQUEST", "BLOCKED", "FAIL"] = "EMPTY"
-    query_type: Optional[Literal["similar_incidents", "failure_history", "corrective_actions", "repeated_patterns"]] = None
+    query_type: Optional[Literal["detail", "aggregate"]] = None
     sql: Optional[str] = None
     rows: list[dict] = Field(default_factory=list)
     results: list[SQLQueryResult] = Field(default_factory=list)

@@ -197,7 +197,7 @@ class SQLAgentInput(BaseModel):
     context_summary: str = ""
 
 class SQLGeneratedQuery(BaseModel):
-    query_type: Literal["similar_incidents", "failure_history", "corrective_actions", "repeated_patterns"]
+    query_type: Literal["detail", "aggregate"]
     purpose: str = ""
     sql_query: Annotated[str, MinLen(1)]
     explanation: str = ""
@@ -242,13 +242,13 @@ SQL_TEXT_TO_SQL_EXAMPLES = [
         "response": {
             "queries": [
                 {
-                    "query_type": "failure_history",
+                    "query_type": "detail",
                     "purpose": "최근 30일 고장 이력 조회",
                     "sql_query": "SELECT id, event_date, failure_type, severity, component, symptom, root_cause, corrective_action, preventive_action, downtime_min, related_features_json, notes FROM failure_history WHERE event_date >= '2026-05-22' ORDER BY event_date DESC LIMIT 50",
                     "explanation": "최근 30일 고장 이력을 최신순으로 조회합니다.",
                 },
                 {
-                    "query_type": "corrective_actions",
+                    "query_type": "detail",
                     "purpose": "최근 30일 대응 방식 조회",
                     "sql_query": "SELECT failure_type, component, corrective_action, preventive_action, downtime_min, event_date FROM failure_history WHERE event_date >= '2026-05-22' ORDER BY downtime_min DESC, event_date DESC LIMIT 50",
                     "explanation": "고장 유형별 대응 조치와 재발 방지 조치를 조회합니다.",
@@ -262,7 +262,7 @@ SQL_TEXT_TO_SQL_EXAMPLES = [
         "response": {
             "queries": [
                 {
-                    "query_type": "similar_incidents",
+                    "query_type": "detail",
                     "purpose": "최근 TWF 유사 사례 조회",
                     "sql_query": "SELECT id, event_date, failure_type, severity, component, symptom, root_cause, corrective_action, preventive_action, downtime_min, related_features_json FROM failure_history WHERE failure_type = 'TWF' AND event_date >= '2026-05-22' ORDER BY event_date DESC LIMIT 50",
                     "explanation": "TWF 고장 유형의 최근 유사 사례와 대응 조치를 조회합니다.",
@@ -276,7 +276,7 @@ SQL_TEXT_TO_SQL_EXAMPLES = [
         "response": {
             "queries": [
                 {
-                    "query_type": "repeated_patterns",
+                    "query_type": "aggregate",
                     "purpose": "고장 유형별 반복 패턴 집계",
                     "sql_query": "SELECT failure_type, severity, component, COUNT(*) AS case_count, SUM(downtime_min) AS total_downtime_min FROM failure_history WHERE event_date >= '2026-05-22' GROUP BY failure_type, severity, component ORDER BY case_count DESC, total_downtime_min DESC LIMIT 50",
                     "explanation": "고장 유형과 부품별 반복 횟수와 다운타임을 집계합니다.",
@@ -290,7 +290,7 @@ SQL_TEXT_TO_SQL_EXAMPLES = [
         "response": {
             "queries": [
                 {
-                    "query_type": "similar_incidents",
+                    "query_type": "detail",
                     "purpose": "TWF/OSF 유사 고장 사례 조회",
                     "sql_query": "SELECT id, event_date, failure_type, severity, component, symptom, root_cause, corrective_action, preventive_action, downtime_min, related_features_json FROM failure_history WHERE failure_type IN ('TWF', 'OSF') AND event_date >= '2026-05-22' ORDER BY event_date DESC LIMIT 50",
                     "explanation": "현재 feature 진단 결과와 연결 가능한 TWF/OSF 과거 사례를 조회합니다.",
@@ -440,10 +440,9 @@ def _build_pydantic_text_to_sql_agent():
             "9. 복합 요청이면 SQLSuccess.queries에 여러 SELECT 쿼리를 넣는다.\n"
             "10. markdown code block으로 SQL을 감싸지 않는다.\n"
             "11. 존재하지 않는 컬럼이나 테이블을 만들지 않는다.\n"
-            "12. query_type은 조회 목적에 맞게 지정한다.\n"
-            "13. Supervisor가 넘긴 query_type은 참고하되, 사용자 질문과 schema에 맞게 SQL을 생성한다.\n"
-            "14. 현재 prediction failure_type이 context에 있으면 failure_type 조건이나 IN 조건으로 유사 사례를 조회할 수 있다.\n"
-            "15. 반복 패턴은 GROUP BY failure_type/component/severity를 사용하고, 대응 방식은 corrective_action/preventive_action을 조회한다.\n\n"
+            "12. query_type은 detail 또는 aggregate 중 하나로 지정한다. detail은 개별 고장 사례를 행 단위로 조회한다(failure_type/component/symptom/root_cause/corrective_action/preventive_action/downtime_min 등 컬럼 포함). aggregate는 고장 유형/부품별 집계 조회다.\n"
+            "13. aggregate는 반드시 GROUP BY(failure_type/component/severity 등)와 함께 COUNT(*) AS case_count, SUM(downtime_min) AS total_downtime_min 집계 컬럼을 사용한다. 집계가 아니면 detail로 지정한다.\n"
+            "14. Supervisor가 넘긴 query_type은 참고하되, 사용자 질문과 schema에 맞게 SQL을 생성한다. 현재 prediction failure_type이 context에 있으면 failure_type 조건이나 IN 조건으로 유사 사례를 조회할 수 있다.\n\n"
             f"Supervisor planned query_types: {ctx.deps.supervisor_query_types}\n\n"
             f"DB schema:\n{ctx.deps.schema_text}\n\n"
             f"Few-shot examples:\n{_format_text_to_sql_examples()}"
@@ -459,6 +458,9 @@ def _build_pydantic_text_to_sql_agent():
         for q in output.queries:
             try:
                 cleaned_sql = _validate_text_to_sql_query(q.sql_query, ctx.deps)
+                # aggregate는 실제 집계(GROUP BY)여야 한다 — 라벨만 aggregate이고 행 단위 SELECT면 재생성을 요구한다.
+                if q.query_type == "aggregate" and "GROUP BY" not in cleaned_sql.upper():
+                    raise ValueError("aggregate query는 GROUP BY와 COUNT/SUM 집계 컬럼을 포함해야 합니다(아니면 query_type=detail).")
             except Exception as e:
                 raise ModelRetry(f"Invalid SQL for query_type={q.query_type}: {type(e).__name__}: {e}")
             cleaned_queries.append(q.model_copy(update={"sql_query": cleaned_sql}))
