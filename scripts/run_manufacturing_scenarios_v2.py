@@ -141,9 +141,14 @@ def _check_multiturn_diag_plus(need_evidence: bool, need_sql: bool):
     """S5-1/2/3: 멀티턴 값 변경 재진단 + (문서/이력/둘다). 2턴 PATCH_ACTIVE 유지 + 조합 task."""
 
     def check(results: list[dict[str, Any]], g: dict[str, Any]) -> CheckResult:
-        first, second = results
+        #first, second = results
         failures: CheckResult = []
-        _require(_artifact_status(first, "prediction") in {"OK", "PARTIAL"}, "1턴 prediction 실패", failures)
+        #_require(_artifact_status(first, "prediction") in {"OK", "PARTIAL"}, "1턴 prediction 실패", failures)
+        if len(results) != 2:
+            failures.append(f"멀티턴인데 결과가 2턴이 아님: {len(results)}")
+            return failures
+        first, second = results
+        _require(_pred_status(first) in {"OK", "PARTIAL"}, f"1턴 prediction status 이상: {_pred_status(first)}", failures)
         pred = second.get("prediction_result")
         _require(pred is not None and pred.status in {"OK", "PARTIAL"}, f"2턴 prediction status 이상: {getattr(pred, 'status', None)}", failures)
         _require(getattr(pred, "context_mode", None) == "PATCH_ACTIVE", f"2턴이 PATCH_ACTIVE가 아님: {getattr(pred, 'context_mode', None)}", failures)
@@ -186,8 +191,11 @@ def _check_failure_type_filter(results: list[dict[str, Any]], g: dict[str, Any])
     failures: CheckResult = []
     _require("prediction" not in _task_types(r), "유형 조회 전용인데 prediction task가 생성됨", failures)
     _check_sql_ok(r, g, failures)
+    #joined = "\n".join(_sql_texts(r.get("sql_result")))
+    #_require("twf" in joined, f"TWF 유형 필터 SQL이 아님: {joined}", failures)
     joined = "\n".join(_sql_texts(r.get("sql_result")))
-    _require("twf" in joined, f"TWF 유형 필터 SQL이 아님: {joined}", failures)
+    joined_1 = joined.lower()
+    _require("twf" in joined_1, f"TWF 유형 필터 SQL이 아님: {joined}", failures)
     _require(("이력" in _answer(r)) or ("사례" in _answer(r)) or ("조치" in _answer(r)), "고장 이력/조치 요약 없음", failures)
     _check_answer_quality(r, failures, mode="default")
     return failures

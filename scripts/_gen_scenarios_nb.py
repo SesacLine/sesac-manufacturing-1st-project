@@ -86,7 +86,7 @@ def code(text: str) -> dict:
 BOOTSTRAP = '''\
 # === 부트스트랩 (제일 먼저 1회 실행) =========================================
 # v2 러너를 라이브러리로 재사용한다. 노트북 런타임(g)을 1회 로드해 모든 셀이 공유한다.
-import os, sys, time
+import os, sys, time, uuid
 from pathlib import Path
 
 # 이 노트북은 scripts/ 에 있다. 어디서 열든 작업 디렉터리를 저장소 루트로 고정해야
@@ -104,7 +104,7 @@ import run_manufacturing_scenarios_v2 as v2
 from run_manufacturing_scenarios import Turn, Scenario, FEATURES_HIGH_RISK
 
 g = v2._load_runtime()                      # manufacturing_agent_v6.ipynb 런타임 구성(LLM 포함)
-run_id = str(int(time.time()))
+#run_id = str(int(time.time()))
 RESULTS: dict[str, bool] = {}               # 셀별 PASS/FAIL 누적
 TIMINGS: dict[str, float] = {}              # 셀별 소요 시간(초) 누적
 
@@ -112,6 +112,8 @@ def run_scenario_inline(sc, full_answer: bool = True):
     """셀에서 인라인 정의한 Scenario 1개를 실행하고 결과를 보기 좋게 출력한다."""
     print(f"[{sc.sid}] {sc.description}")
     _t0 = time.perf_counter()
+    #ok, failures, results = base.run_scenario(g, sc, run_id)
+    run_id = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
     ok, failures, results = base.run_scenario(g, sc, run_id)
     elapsed = time.perf_counter() - _t0
     summary = base.summarize_result(
@@ -168,7 +170,11 @@ def render_scenario_cell(sc) -> str:
 
 def main() -> int:
     cells: list[dict] = []
-
+    all_scenarios = v2.scenarios()
+    missing = {sc.sid for sc in all_scenarios} - set(CHECK_EXPR)
+    if missing:
+        print("경고: CHECK_EXPR 누락 sid:", sorted(missing))
+        return 1
     cells.append(md(
         "# Manufacturing Agent v2 — 시나리오별 실행 노트북 (인라인 정의)\n\n"
         "`scripts/run_manufacturing_scenarios_v2.py` 의 A~D 사용자 시나리오 + R 회귀 트랙을 "
@@ -184,7 +190,7 @@ def main() -> int:
     cells.append(code(BOOTSTRAP))
 
     last_group = None
-    for sc in v2.scenarios():
+    for sc in all_scenarios:
         group = next((t for t in sc.tags if t in GROUP_LABELS), None)
         if group != last_group:
             cells.append(md(f"## {GROUP_LABELS.get(group, group or '기타')}"))
@@ -228,11 +234,8 @@ def main() -> int:
     }
     OUT.write_text(json.dumps(nb, ensure_ascii=False, indent=1), encoding="utf-8")
 
-    missing = {sc.sid for sc in v2.scenarios()} - set(CHECK_EXPR)
-    if missing:
-        print("경고: CHECK_EXPR 누락 sid:", sorted(missing))
     print("생성 완료:", OUT)
-    print("셀 수:", len(cells), "| 시나리오 수:", len(v2.scenarios()))
+    print("셀 수:", len(cells), "| 시나리오 수:", len(all_scenarios))
     return 0
 
 
