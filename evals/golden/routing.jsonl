@@ -1,0 +1,26 @@
+{"id": "rt_pred_only", "split": "clear", "msg": "토크 60, 공구마모 210만 보고 고장 위험을 진단해줘", "expect": {"intent": "prediction_diagnosis", "needs_prediction": true, "needs_sql": false, "needs_evidence": false}}
+{"id": "rt_pred_structured", "split": "clear", "msg": "입력한 데이터로 고장 위험을 진단해줘", "input_features": {"type": "M", "air_temperature": 298.0, "process_temperature": 309.0, "rotational_speed": 1320.0, "torque": 62.0, "tool_wear": 215.0}, "expect": {"needs_prediction": true, "needs_sql": false, "needs_evidence": false}}
+{"id": "rt_sql_detail", "split": "clear", "msg": "2026-06-21 기준 최근 TWF 사례에서 어떤 조치를 했는지 정리해줘", "expect": {"intent": "history_lookup", "needs_prediction": false, "needs_sql": true, "needs_evidence": false, "sql_query_intents": ["detail"]}}
+{"id": "rt_sql_aggregate", "split": "clear", "msg": "고장 유형별 반복 패턴과 부품별 다운타임을 집계해서 정리해줘", "expect": {"needs_sql": true, "needs_prediction": false, "needs_evidence": false, "sql_query_intents": ["aggregate"]}}
+{"id": "rt_sql_history", "split": "clear", "msg": "2026-06-21 기준 최근 30일 고장 이력과 대응 방식을 요약해줘", "expect": {"needs_sql": true, "needs_prediction": false, "needs_evidence": false, "sql_query_intents": ["detail"]}}
+{"id": "rt_evidence_proc", "split": "clear", "msg": "스핀들 베어링 점검 절차를 매뉴얼 근거로 알려줘", "expect": {"intent": "document_qa", "needs_evidence": true, "needs_prediction": false, "needs_sql": false}}
+{"id": "rt_safety_guidance", "split": "clear", "msg": "점검 없이 재가동해도 돼? 왜 위험한지 매뉴얼 근거와 안전 절차를 알려줘", "expect": {"intent": "safety_guidance", "needs_evidence": true, "needs_prediction": false, "needs_sql": false}}
+{"id": "rt_combined_all", "split": "clear", "msg": "이 수치로 위험 진단하고, 비슷한 과거 고장 사례랑 점검 문서 근거까지 다 줘", "input_features": {"type": "H", "air_temperature": 301.0, "process_temperature": 312.0, "rotational_speed": 1380.0, "torque": 64.0, "tool_wear": 215.0}, "expect": {"intent": "combined_analysis", "needs_prediction": true, "needs_sql": true, "needs_evidence": true}}
+{"id": "rt_hist_plus_evidence", "split": "adversarial", "msg": "비슷한 과거 고장 사례랑 그 원인 설명 문서도 같이 줘", "expect": {"needs_sql": true, "needs_evidence": true, "needs_prediction": false}}
+{"id": "rt_general_qa", "split": "adversarial", "msg": "CNC 가공에서 채터(chatter)가 뭐야?", "expect": {"needs_evidence": true, "needs_prediction": false, "needs_sql": false}}
+{"id": "rt_ambiguous_summary", "split": "adversarial", "msg": "요약해줘", "expect": {"needs_evidence": true}, "note": "worker 없음 → evidence fallback(soft)"}
+{"id": "rt_followup_sql", "split": "holdout", "msg": "방금 조회한 고장 유형 중 HIGH 심각도만 다시 정리해줘", "prior": {"previous_sql_summary": true}, "expect": {"needs_sql": true}}
+{"id": "rt_followup_evidence", "split": "holdout", "msg": "방금 근거 기준으로 점검 항목을 더 구체화해줘", "prior": {"previous_evidence_summary": true}, "expect": {"needs_evidence": true}}
+{"id": "rt_trap_add_evidence", "split": "holdout", "msg": "그럼 이 고장에 대한 점검 문서 근거도 새로 찾아줘", "prior": {"previous_sql_summary": true}, "expect": {"needs_evidence": true, "needs_sql": false}}
+{"id": "rt_aggregate_downtime", "split": "clear", "msg": "부품별 다운타임 합계를 집계해줘", "expect": {"needs_sql": true, "needs_prediction": false, "needs_evidence": false, "sql_query_intents": ["aggregate"]}}
+{"id": "rt_corrective_actions", "split": "clear", "msg": "최근 고장들의 대응 조치와 예방 조치를 정리해줘", "expect": {"needs_sql": true, "needs_prediction": false, "needs_evidence": false}}
+{"id": "rt_evidence_loto", "split": "clear", "msg": "LOTO 잠금·표지 절차 문서 근거 알려줘", "expect": {"needs_evidence": true, "needs_sql": false, "needs_prediction": false}}
+{"id": "rt_pred_plus_evidence", "split": "adversarial", "msg": "이 수치로 진단하고 관련 점검 문서 근거도 줘", "input_features": {"type": "M", "air_temperature": 298.0, "process_temperature": 309.0, "rotational_speed": 1320.0, "torque": 62.0, "tool_wear": 215.0}, "expect": {"needs_prediction": true, "needs_evidence": true, "needs_sql": false}}
+{"id": "rt_pred_plus_sql", "split": "adversarial", "msg": "이 수치 진단하고 비슷한 과거 사례도", "input_features": {"type": "H", "air_temperature": 301.0, "process_temperature": 312.0, "rotational_speed": 1380.0, "torque": 64.0, "tool_wear": 215.0}, "expect": {"needs_prediction": true, "needs_sql": true, "needs_evidence": false}}
+{"id": "rt_safety_loto_advice", "split": "clear", "msg": "LOTO 안 하고 정비하면 왜 위험한지 알려줘", "expect": {"intent": "safety_guidance", "needs_evidence": true, "needs_prediction": false, "needs_sql": false}}
+{"id": "rt_general_def", "split": "clear", "msg": "OSF 고장이 뭔지 설명해줘", "expect": {"needs_evidence": true, "needs_prediction": false, "needs_sql": false}}
+{"id": "rt_history_severity", "split": "clear", "msg": "최근 HIGH 심각도 고장 사례만 조회해줘", "expect": {"needs_sql": true, "needs_prediction": false, "needs_evidence": false, "sql_query_intents": ["detail"]}}
+{"id": "rt_repeated_pattern", "split": "clear", "msg": "고장 유형별 반복 횟수를 집계해줘", "expect": {"needs_sql": true, "sql_query_intents": ["aggregate"], "needs_prediction": false}}
+{"id": "rt_followup_more_similar", "split": "holdout", "msg": "방금 사례랑 비슷한 게 더 있어?", "prior": {"previous_sql_summary": true}, "expect": {"needs_sql": true}}
+{"id": "rt_terse_diag", "split": "adversarial", "msg": "토크 70 마모 230 진단", "expect": {"needs_prediction": true, "needs_sql": false, "needs_evidence": false}}
+{"id": "rt_procedure_only", "split": "clear", "msg": "스핀들 드라이브 벨트 교체 절차 문서 근거", "expect": {"needs_evidence": true, "needs_sql": false, "needs_prediction": false}}

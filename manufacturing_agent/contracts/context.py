@@ -229,6 +229,8 @@ class SQLHistoryArtifact(BaseModel):
 class FinalAnswer(BaseModel):
     answer: str
     citations: list[dict] = Field(default_factory=list)
+    # SQL 데이터 출처(drill-down): 실행된 read-only 쿼리 + 반환 행 스냅샷. 프론트가 [D#] 칩으로 렌더한다.
+    data_refs: list[dict] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     missing_inputs: list[str] = Field(default_factory=list)
 
