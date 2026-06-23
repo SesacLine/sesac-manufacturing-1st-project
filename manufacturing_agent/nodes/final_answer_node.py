@@ -351,7 +351,18 @@ def _headline(pred, sql, ev, user_q: str) -> str:
     facts = []
     if pred and pred.risk_flags:
         top = pred.risk_flags[0]
-        facts.append(f"진단: {_short_failure(top.get('failure_type'))} 등 위험 {_risk_level_ko(top.get('level'))}")
+        top_fact = (
+            f"진단: {_short_failure(top.get('failure_type'))} 위험 {_risk_level_ko(top.get('level'))}"
+            + (f" — {top.get('formula')}" if top.get("formula") else "")
+        )
+        facts.append(top_fact)
+        others = [
+            _short_failure(r.get("failure_type"))
+            for r in pred.risk_flags[1:]
+            if str(r.get("level", "")).lower() in {"high", "medium"}
+        ]
+        if others:
+            facts.append("추가 위험: " + " · ".join(others[:2]))
     elif pred and getattr(pred, "status", None) == "NEEDS_INPUT":
         facts.append("진단: 입력 부족으로 추가 데이터 필요")
     if sql is not None:
