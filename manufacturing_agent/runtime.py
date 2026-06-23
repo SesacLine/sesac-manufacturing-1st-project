@@ -50,22 +50,6 @@ def make_initial_state(user_message: str, user_id: str, thread_id: str, request_
     }
 
 
-def checkpoint_status(thread_id: str, user_id: Optional[str] = None, request_id: str = "checkpoint-status",
-                      *, checkpoint_ns: str = "") -> dict:
-    effective_user_id = user_id or DEMO_USER_ID
-    config = make_runnable_config(effective_user_id, thread_id, request_id, checkpoint_ns=checkpoint_ns)
-    snapshot = app.get_state(config)
-    values = snapshot.values or {}
-    return {
-        "next": tuple(snapshot.next or ()),
-        "request_id": values.get("request_id"),
-        "user_message": values.get("user_message"),
-        "active_task_id": values.get("active_task_id"),
-        "has_final_answer": bool(values.get("final_answer")),
-        "gate_count": len(values.get("gate_reports") or []),
-    }
-
-
 def _invoke_from_checkpoint(app_obj, config: RunnableConfig, *, max_resume_attempts: int = 1):
     last_exc = None
     for attempt in range(1, max_resume_attempts + 1):

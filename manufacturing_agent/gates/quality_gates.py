@@ -5,7 +5,7 @@ from manufacturing_agent.agents.evidence_agent import DEFAULT_SQL_DEPS, get_acti
 from manufacturing_agent.contracts.context import FinalAnswer, GateReport, OutputSafetyDecision
 from manufacturing_agent.contracts.state import ManufacturingState
 from manufacturing_agent.gates.intake_gate import SAFETY_BLOCK_MESSAGE
-from manufacturing_agent.util import _json_object
+from manufacturing_agent.util import _coerce_bool, _json_object
 
 # ---------- gates/prediction_gate.py ----------
 def _active_task_id(state: ManufacturingState, task_type: str) -> Optional[str]:
@@ -37,14 +37,6 @@ def prediction_gate(state: ManufacturingState) -> dict:
     return {"gate_reports": state.get("gate_reports", []) + [report.model_dump()]}
 
 # ---------- gates/evidence_gate.py ----------
-def _evidence_required_by_user(state: ManufacturingState) -> bool:
-    params = get_active_task_params(state, expected_type="evidence")
-    if params:
-        return bool(params.get("evidence_required") or params.get("focus"))
-    packet = state.get("context_packet")
-    carry = packet.context_carryover if packet else None
-    return bool(carry and carry.uses_previous_evidence)
-
 def evidence_gate(state: ManufacturingState) -> dict:
     ev = state.get("evidence_bundle")
     task_id = _active_task_id(state, "evidence")
@@ -154,17 +146,6 @@ OUTPUT_SAFETY_SYS = (
 )
 
 _VALID_OUTPUT_REASONS = {"ok", "empty", "unsafe_instruction", "overconfident_safety", "policy_violation"}
-
-def _coerce_bool(value, default: bool = False) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        low = value.strip().lower()
-        if low in {"true", "1", "yes", "y"}:
-            return True
-        if low in {"false", "0", "no", "n"}:
-            return False
-    return default
 
 def _normalize_output_safety_payload(data: dict) -> dict:
     reason = str(data.get("reason", "ok")).strip().lower()

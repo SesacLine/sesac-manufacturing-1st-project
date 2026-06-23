@@ -1,11 +1,11 @@
 from __future__ import annotations
 from manufacturing_agent._common import *  # noqa: F401,F403
 from manufacturing_agent.config import *  # noqa: F401,F403
-from manufacturing_agent.context.policy import STANDARD_FEATURES, detect_injection
-from manufacturing_agent.contracts.context import AgentContextPacket, ContextCarryoverDecision, ContextMode, ContextPacket, ContextResolution, DiagnosisContext, MachineValue
-from manufacturing_agent.util import _json_object
+from manufacturing_agent.context.policy import PER_TURN_CHAR_CAP, RECENT_SUMMARY_CHAR_BUDGET, STANDARD_FEATURES, detect_injection
+from manufacturing_agent.contracts.context import AgentContextPacket, ContextCarryoverDecision, ContextPacket, MachineValue
 
 # ---------- context/context_packer.py ----------
+# carryover/resolution 판단(LLM)은 context/engine.py로 이동했다. 이 파일은 대화 요약/패킹/공용 컨텍스트 요약만 담당한다.
 def _messages_to_recent_turns(messages: list, limit: int = 6) -> list[dict]:
     turns = []
     for m in messages or []:
@@ -20,210 +20,99 @@ def _messages_to_recent_turns(messages: list, limit: int = 6) -> list[dict]:
         turns.append({"role": role, "content": str(content), "created_at": "checkpoint"})
     return turns[-limit:]
 
-def _summarize_recent_turns(turns: list[dict], limit: int = 6, chars: int = 120) -> str:
-    return " | ".join(f"{t['role']}:{str(t['content']).replace(chr(10), ' ')[:chars]}" for t in turns[-limit:])
+# 멀티턴 대화 윈도우 정책:
+# - 사용자 질문은 의도 추적에 중요하므로 윈도우 안에서 전부 유지한다(단, 토큰 버짓 캡 적용).
+# - AI 답변은 원문이 길어 토큰을 많이 쓰므로 최근 ASSISTANT_TURN_LIMIT개만 유지한다.
+# - RECENT_TURN_WINDOW는 상류에서 가져오는 최근 대화 턴 상한(폭주 방지용 안전 한도)이다.
+RECENT_TURN_WINDOW = 50
+ASSISTANT_TURN_LIMIT = 4
 
-CONTEXT_CARRYOVER_SYS = (
-    "너는 제조업 멀티턴 Agent의 컨텍스트 해석기다. 현재 사용자 발화가 이전 대화나 이전 artifact를 참조하는지 판단한다. "
-    "정규식 키워드가 아니라 의미로 판단하라. 예: '그 이력', '방금 근거', '관련 조치', '이어서', '비슷한 사례'는 이전 artifact 참조일 수 있다. "
-    "너는 task planner가 아니다. SQL 조회 필요 여부, 문서 검색 필요 여부, worker task 분해는 SupervisorPlanner가 담당한다. "
-    "현재 질문이 이전 prediction/sql/evidence artifact를 참조하는지만 referenced_artifacts와 uses_previous_* 필드로 표시한다. "
-    "고장 유형, 부품, 증상, 원인, 기간처럼 이전 artifact에서 이어받을 수 있는 맥락은 reason_summary에 짧게 설명하되, 최종 task 판단은 하지 않는다. "
-    "단, 실제 실행이나 안전 승인을 대신 판단하지 말고 컨텍스트 carryover만 판단한다. 반드시 JSON만 출력하라. "
-    "{\"is_followup\": true/false, \"uses_previous_prediction\": true/false, \"uses_previous_evidence\": true/false, "
-    "\"uses_previous_sql\": true/false, \"inferred_time_range\": null 또는 객체, "
-    "\"referenced_artifacts\": [\"prediction|sql|evidence\"], \"reason_summary\": \"짧은 이유\"}"
-)
-
-def _llm_context_carryover(user_message: str, selected: dict) -> ContextCarryoverDecision:
-    recent_summary = _summarize_recent_turns(selected.get("recent_turns") or [], limit=8, chars=180)
-    payload = {
-        "current_user_message": user_message,
-        "recent_turns_summary": recent_summary,
-        "previous_prediction_summary": selected.get("previous_prediction_summary"),
-        "previous_evidence_summary": selected.get("previous_evidence_summary"),
-        "previous_sql_summary": selected.get("previous_sql_summary"),
-    }
-    raw = call_llm(CONTEXT_CARRYOVER_SYS, json.dumps(payload, ensure_ascii=False), tier="default")
-    try:
-        data = _json_object(raw)
-        allowed_refs = {"prediction", "sql", "evidence"}
-        refs = data.get("referenced_artifacts") or []
-        if isinstance(refs, str):
-            refs = [refs]
-        data["referenced_artifacts"] = [x for x in refs if x in allowed_refs]
-        decision = ContextCarryoverDecision.model_validate(data)
-        if decision.is_followup and not decision.referenced_artifacts:
-            refs = []
-            if decision.uses_previous_prediction:
-                refs.append("prediction")
-            if decision.uses_previous_sql:
-                refs.append("sql")
-            if decision.uses_previous_evidence:
-                refs.append("evidence")
-            decision = decision.model_copy(update={"referenced_artifacts": refs})
-        if not decision.is_followup:
-            decision = decision.model_copy(update={
-                "uses_previous_prediction": False,
-                "uses_previous_evidence": False,
-                "uses_previous_sql": False,
-                "referenced_artifacts": [],
-            })
-        return decision
-    except Exception as e:
-        return ContextCarryoverDecision(reason_summary=f"context_carryover_parse_error: {type(e).__name__}")
-
-
-CONTEXT_RESOLUTION_SYS = (
-    "너는 제조업 Agent의 ContextManager다. 너는 task planner가 아니다. "
-    "현재 질문이 이전 진단 입력 snapshot을 어떻게 참조하는지만 판단한다. "
-    "mode는 CURRENT_ONLY, USE_ACTIVE, PATCH_ACTIVE, SELECT_HISTORY, REFER_ACTIVE_RESULT 중 하나다. "
-    "CURRENT_ONLY는 현재 사용자가 직접 말한 값만 쓴다. 이전 feature 자동 보완은 금지다. "
-    "USE_ACTIVE는 사용자가 방금/아까/같은 조건/이전 입력값 기준이라고 명시한 경우 active context 전체를 쓴다. "
-    "PATCH_ACTIVE는 사용자가 특정 값만 바꾸라고 명시한 경우 active context 하나에 현재 변경값만 덮어쓴다. "
-    "SELECT_HISTORY는 recent_contexts 중 사용자가 특정 과거 조건 하나를 지칭한 경우만 쓴다. 여러 context를 섞지 않는다. "
-    "REFER_ACTIVE_RESULT는 재진단이 아니라 방금 결과/고장 유형/근거/이력만 참조하는 경우다. "
-    "반드시 JSON만 출력하라: "
-    "{\"mode\": \"CURRENT_ONLY|USE_ACTIVE|PATCH_ACTIVE|SELECT_HISTORY|REFER_ACTIVE_RESULT\", "
-    "\"base_context_id\": null 또는 문자열, \"patch_values\": 객체, \"reason\": \"짧은 이유\"}"
-)
-
-def _context_brief(ctx: Optional[DiagnosisContext]) -> Optional[dict]:
-    if not ctx:
-        return None
-    return {
-        "id": ctx.id,
-        "turn_id": ctx.turn_id,
-        "features": ctx.features,
-        "failure_types": ctx.failure_types,
-        "prediction_summary": ctx.prediction_summary[:500],
-        "created_at": ctx.created_at,
-    }
-
-def _contexts_by_id(selected: dict) -> dict[str, DiagnosisContext]:
-    out: dict[str, DiagnosisContext] = {}
-    active = selected.get("active_context")
-    if active:
-        out[active.id] = active
-    for ctx in selected.get("recent_contexts") or []:
-        out[ctx.id] = ctx
+def _dedup_turns(turns: list[dict]) -> list[dict]:
+    """(role, content) 기준 중복 제거, 첫 등장 순서 보존.
+    store 턴과 checkpoint(messages) 턴이 같은 대화를 중복 제공하는 것을 막는다."""
+    seen: set = set()
+    out: list[dict] = []
+    for t in turns or []:
+        key = (t.get("role"), str(t.get("content")))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(t)
     return out
 
-def _filter_patch_values(values: dict, current_values: dict) -> dict[str, Any]:
-    allowed = set(current_values)
-    return {k: v for k, v in (values or {}).items() if k in allowed}
+def _apply_char_budget(parts: list[str], budget: int) -> list[str]:
+    """말미(최신) 우선으로 char 버짓 안에 들어오는 항목만 남긴다. 오래된 항목부터 버린다."""
+    if budget <= 0:
+        return parts
+    kept: list[str] = []
+    total = 0
+    for piece in reversed(parts):
+        add = len(piece) + 3  # separator 여유
+        if total + add > budget and kept:
+            break
+        kept.append(piece)
+        total += add
+    kept.reverse()
+    return kept
 
-def _llm_context_resolution(user_message: str, selected: dict) -> ContextResolution:
-    payload = {
-        "current_user_message": user_message,
-        "current_values_extracted_from_this_turn": selected.get("current_values") or {},
-        "active_context": _context_brief(selected.get("active_context")),
-        "recent_contexts": [_context_brief(c) for c in (selected.get("recent_contexts") or [])],
-        "recent_turns_summary": _summarize_recent_turns(selected.get("recent_turns") or [], limit=8, chars=160),
-        "previous_prediction_summary_available": bool(selected.get("previous_prediction_summary")),
-        "previous_sql_summary_available": bool(selected.get("previous_sql_summary")),
-        "previous_evidence_summary_available": bool(selected.get("previous_evidence_summary")),
-    }
-    raw = call_llm(CONTEXT_RESOLUTION_SYS, json.dumps(payload, ensure_ascii=False), tier="default")
-    data = _json_object(raw)
-    mode = data.get("mode") if data.get("mode") in ContextMode.__args__ else "CURRENT_ONLY"
-    return ContextResolution(
-        mode=mode,
-        current_values=selected.get("current_values") or {},
-        base_context_id=data.get("base_context_id"),
-        patch_values=_filter_patch_values(data.get("patch_values") or {}, selected.get("current_values") or {}),
-        reason=str(data.get("reason") or "LLM context resolution"),
-    )
-
-def resolve_context(user_message: str, selected: dict) -> ContextResolution:
-    current_values = dict(selected.get("current_values") or {})
-    contexts = _contexts_by_id(selected)
-    active = selected.get("active_context")
-    warnings: list[str] = []
-    try:
-        decision = _llm_context_resolution(user_message, selected)
-    except Exception as e:
-        decision = ContextResolution(
-            mode="CURRENT_ONLY",
-            current_values=current_values,
-            resolved_features=current_values,
-            changed_features=list(current_values.keys()),
-            warnings=[f"context_resolution_llm_fallback: {type(e).__name__}"],
-            reason="Context resolution failed; current values only",
-        )
-        return decision
-
-    mode = decision.mode
-    base_context_id = decision.base_context_id
-    base: Optional[DiagnosisContext] = None
-
-    if mode in {"USE_ACTIVE", "PATCH_ACTIVE"}:
-        base = active
-        if base and not base_context_id:
-            base_context_id = base.id
-    elif mode == "REFER_ACTIVE_RESULT":
-        base = active
-        if base and not base_context_id:
-            base_context_id = base.id
-    elif mode == "SELECT_HISTORY":
-        if base_context_id and base_context_id in contexts:
-            base = contexts[base_context_id]
-        else:
-            warnings.append("특정 과거 조건을 안정적으로 선택하지 못해 현재 입력만 사용합니다.")
-            mode = "CURRENT_ONLY"
-
-    if mode in {"USE_ACTIVE", "PATCH_ACTIVE"} and not base:
-        warnings.append("재사용할 active 진단 context가 없어 현재 입력만 사용합니다.")
-        mode = "CURRENT_ONLY"
-
-    patch_values = dict(decision.patch_values or {})
-    if mode in {"PATCH_ACTIVE", "SELECT_HISTORY"} and current_values and not patch_values:
-        patch_values = current_values
-
-    if mode == "CURRENT_ONLY":
-        resolved = current_values
-        changed = list(current_values.keys())
-        reused: list[str] = []
-        base_context_id = None
-    elif mode == "REFER_ACTIVE_RESULT":
-        resolved = {}
-        changed = []
-        reused = []
-    elif mode == "USE_ACTIVE" and base:
-        resolved = dict(base.features or {})
-        changed = []
-        reused = list(resolved.keys())
-    elif mode in {"PATCH_ACTIVE", "SELECT_HISTORY"} and base:
-        if not patch_values:
-            warnings.append("변경할 현재 값이 없어 base context를 그대로 사용합니다.")
-        resolved = dict(base.features or {})
-        for key, value in patch_values.items():
-            resolved[key] = value
-        changed = list(patch_values.keys())
-        reused = [k for k in resolved.keys() if k not in changed]
+def _summarize_recent_turns(turns: list[dict], limit: int = 6, chars: Optional[int] = None,
+                            *, user_all: bool = False, assistant_limit: Optional[int] = ASSISTANT_TURN_LIMIT) -> str:
+    """최근 대화를 'role:content' 한 줄 형태로 이어붙인다(개행은 공백으로 평탄화).
+    user_all=True이면 사용자(user) 턴은 모두 유지하고, AI(assistant) 답변만 최근 assistant_limit개로 제한한다(순서 보존).
+    토큰 폭주 방지를 위해 각 턴 본문은 PER_TURN_CHAR_CAP로, 전체 길이는 RECENT_SUMMARY_CHAR_BUDGET로 캡한다(최신 우선)."""
+    seq = list(turns or [])
+    if user_all:
+        assistant_idx = [i for i, t in enumerate(seq) if t.get("role") == "assistant"]
+        keep = set(assistant_idx) if assistant_limit is None else set(assistant_idx[-assistant_limit:])
+        selected = [t for i, t in enumerate(seq) if t.get("role") != "assistant" or i in keep]
     else:
-        resolved = current_values
-        changed = list(current_values.keys())
-        reused = []
-        base_context_id = None
-        mode = "CURRENT_ONLY"
+        selected = seq[-limit:]
+    per_turn_cap = chars if chars is not None else PER_TURN_CHAR_CAP
+    def _body(content: Any) -> str:
+        text = str(content).replace(chr(10), " ")
+        return text if per_turn_cap is None else text[:per_turn_cap]
+    parts = [f"{t['role']}:{_body(t['content'])}" for t in selected]
+    parts = _apply_char_budget(parts, RECENT_SUMMARY_CHAR_BUDGET)
+    return " | ".join(parts)
 
-    return ContextResolution(
-        mode=mode,
-        current_values=current_values,
-        base_context_id=base_context_id,
-        patch_values=patch_values,
-        resolved_features=resolved,
-        changed_features=changed,
-        reused_features=reused,
-        warnings=list(decision.warnings or []) + warnings,
-        reason=decision.reason,
-    )
+
+def build_context_summary(packet: Optional[ContextPacket], *, for_sql: bool = False,
+                          prediction_result: Optional[Any] = None) -> str:
+    """planner payload와 evidence_agent SQL context가 공유하는 단일 컨텍스트 요약 빌더.
+    두 LLM 채널(LangGraph call_llm / PydanticAI)이 동일한 멀티턴 맥락을 보도록 일원화한다.
+    for_sql=True면 failure_history 가드 문장과 현재 prediction failure_types를 덧붙인다.
+    (reference_date·time_range sanitize·task params 같은 SQL 실행 전용 항목은 호출측이 추가한다.)"""
+    if not packet:
+        return ""
+    carry = packet.context_carryover
+    blocks: list[str] = []
+    if for_sql:
+        blocks.append("현재 SQL DB는 failure_history 단일 테이블이다. 설비/자산 식별자 조건은 사용하지 않는다.")
+    if packet.recent_turns_summary:
+        blocks.append(f"참고용 최근 대화(thread context): {packet.recent_turns_summary}")
+
+    def _label(used: Optional[bool], name: str) -> str:
+        return f"현재 질문이 참조한 이전 {name} artifact" if used else f"참고용 이전 {name} artifact"
+
+    if packet.previous_sql_summary:
+        blocks.append(f"{_label(carry and carry.uses_previous_sql, 'SQL 이력')}: {packet.previous_sql_summary}")
+    if packet.previous_evidence_summary:
+        blocks.append(f"{_label(carry and carry.uses_previous_evidence, '문서 근거')}: {packet.previous_evidence_summary}")
+    if packet.previous_prediction_summary:
+        blocks.append(f"{_label(carry and carry.uses_previous_prediction, '위험 진단')}: {packet.previous_prediction_summary}")
+    if for_sql and prediction_result is not None:
+        blocks.append(
+            f"현재 prediction failure_types: {getattr(prediction_result, 'failure_types', [])}; "
+            f"cause_features: {getattr(prediction_result, 'cause_features', [])}")
+    if not for_sql and packet.user_constraints:
+        blocks.append(f"현재 제약/범위: {json.dumps(packet.user_constraints, ensure_ascii=False)}")
+    return "\n".join(blocks)
+
 
 def pack_contexts(user_message: str, merged: dict[str, MachineValue],
                   selected: dict, warnings: list[str]) -> tuple[ContextPacket, dict[str, AgentContextPacket]]:
     """ContextPacket + Agent별 AgentContextPacket 생성."""
-    recent_summary = _summarize_recent_turns(selected.get("recent_turns") or [])
+    recent_summary = _summarize_recent_turns(selected.get("recent_turns") or [], user_all=True)
     carry = selected.get("context_carryover") or ContextCarryoverDecision()
     prior_results = {
         "prediction_summary": selected.get("previous_prediction_summary"),
@@ -244,10 +133,8 @@ def pack_contexts(user_message: str, merged: dict[str, MachineValue],
     packet = ContextPacket(
         current_question=user_message,
         recent_turns_summary=recent_summary,
-        current_values=selected.get("current_values") or {},
         context_resolution=resolution,
         selected_machine_values=merged,
-        previous_prediction_result=selected.get("previous_prediction_result"),
         previous_prediction_summary=selected.get("previous_prediction_summary"),
         previous_evidence_summary=selected.get("previous_evidence_summary"),
         previous_sql_summary=selected.get("previous_sql_summary"),
@@ -285,4 +172,4 @@ def pack_contexts(user_message: str, merged: dict[str, MachineValue],
             prior_results=prior_results),
     }
     return packet, agent_ctx
-print("context_packer 정의 완료")
+print("context_packer(요약 캡 + build_context_summary 일원화) 정의 완료")

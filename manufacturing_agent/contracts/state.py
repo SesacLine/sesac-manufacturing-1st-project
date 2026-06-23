@@ -1,7 +1,7 @@
 from __future__ import annotations
 from manufacturing_agent._common import *  # noqa: F401,F403
 from manufacturing_agent.config import *  # noqa: F401,F403
-from manufacturing_agent.contracts.context import ContextPacket, EvidenceArtifact, ExecutionPlan, FinalAnswer, InputDecision, InputFlags, IntakeDecision, MachineFeatureInput, OrchestratorDecision, PredictionResult, RouteDecision, RunTrace, SQLHistoryArtifact, SQLIntentDecision, SupervisorPlannerDecision, SupervisorReplannerDecision
+from manufacturing_agent.contracts.context import ContextPacket, EvidenceArtifact, ExecutionPlan, FinalAnswer, InputDecision, InputFlags, IntakeDecision, MachineFeatureInput, OrchestratorDecision, PredictionResult, RouteDecision, SQLHistoryArtifact, SQLIntentDecision, SupervisorPlannerDecision, SupervisorReplannerDecision
 
 # ---------- contracts/state.py ----------
 class ManufacturingState(MessagesState, total=False):
@@ -38,6 +38,5 @@ class ManufacturingState(MessagesState, total=False):
     retry_counts: dict
 
     final_answer: Optional[FinalAnswer]
-    run_trace: Optional[RunTrace]
 
 print("ManufacturingState(MessagesState 상속) 정의 완료")

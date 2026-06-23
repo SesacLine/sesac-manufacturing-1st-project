@@ -20,5 +20,17 @@ def _json_object(raw: str) -> dict:
         end = text.rfind("}")
         return json.loads(text[start:end + 1])
 
+def _coerce_bool(value, default: bool = False) -> bool:
+    """LLM/JSON에서 온 bool 후보(실제 bool, "true"/"1"/"yes" 등 문자열)를 bool로 정규화한다."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        low = value.strip().lower()
+        if low in {"true", "1", "yes", "y"}:
+            return True
+        if low in {"false", "0", "no", "n"}:
+            return False
+    return default
+
 # import * 가 밑줄(_x) 이름까지 가져오도록 명시 export
 __all__ = [n for n in dir() if not n.startswith("__")]

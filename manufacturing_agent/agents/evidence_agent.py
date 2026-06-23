@@ -1,7 +1,8 @@
 from __future__ import annotations
 from manufacturing_agent._common import *  # noqa: F401,F403
 from manufacturing_agent.config import *  # noqa: F401,F403
-from manufacturing_agent.contracts.context import ContextPacket, EvidenceArtifact, ExecutionPlan, PredictionResult, SQLHistoryArtifact, SQLIntentDecision, SQLQueryResult, TaskSpec
+from manufacturing_agent.context.packer import build_context_summary
+from manufacturing_agent.contracts.context import SQL_QUERY_TYPES, ContextPacket, EvidenceArtifact, ExecutionPlan, PredictionResult, SQLHistoryArtifact, SQLIntentDecision, SQLQueryResult, TaskSpec
 from manufacturing_agent.contracts.state import ManufacturingState
 from manufacturing_agent.services.rag_service import build_citation_aware_docs, rag_search
 
@@ -85,21 +86,11 @@ def evidence_agent(state: ManufacturingState) -> dict:
         bundle = EvidenceArtifact(
             status="EMPTY",
             retrieval_profile=rag_plan["profile"],
-            user_query=rag_plan["user_query"],
             queries=[rag_plan["search_query"]],
             documents=[],
             citations=[],
             evidence_summary="관련 문서 근거를 찾지 못했습니다.",
             limitations=rag_limitations or ["검색된 문서가 없어 근거 기반 단정은 제한됩니다."],
-            mode=rag_plan["mode"],
-            search_query=rag_plan["search_query"],
-            tags=rag_plan["tags"],
-            doc_whitelist=rag_plan["doc_whitelist"],
-            failure_types=rag_plan["failure_types"],
-            failure_ko=rag_plan["failure_ko"],
-            is_prediction_based=(rag_plan["mode"] == "B"),
-            supervisor_intent=getattr(plan, "intent", None),
-            feedback=feedback,
             is_retry=bool(feedback),
         )
         return {"evidence_bundle": bundle}
@@ -108,21 +99,11 @@ def evidence_agent(state: ManufacturingState) -> dict:
         bundle = EvidenceArtifact(
             status="LOW_RELEVANCE",
             retrieval_profile=rag_plan["profile"],
-            user_query=rag_plan["user_query"],
             queries=[rag_plan["search_query"]],
             documents=docs,
             citations=citations,
             evidence_summary="검색된 문서의 관련성이 낮아 근거 기반 단정은 제한됩니다.",
             limitations=rag_limitations or ["검색된 문서의 관련성이 낮습니다."],
-            mode=rag_plan["mode"],
-            search_query=rag_plan["search_query"],
-            tags=rag_plan["tags"],
-            doc_whitelist=rag_plan["doc_whitelist"],
-            failure_types=rag_plan["failure_types"],
-            failure_ko=rag_plan["failure_ko"],
-            is_prediction_based=(rag_plan["mode"] == "B"),
-            supervisor_intent=getattr(plan, "intent", None),
-            feedback=feedback,
             is_retry=bool(feedback),
         )
         return {"evidence_bundle": bundle}
@@ -131,11 +112,18 @@ def evidence_agent(state: ManufacturingState) -> dict:
     if feedback:
         summary_system += " 이번은 보완 검색이다. 이전에 부족했던 부분을 중심으로 근거 설명을 확장하라."
     citation_docs = build_citation_aware_docs(docs, citations)
+    # 최근 대화 원문은 요약 생성 LLM에만 참고로 주입한다.
+    # 검색 쿼리(question)에는 넣지 않아 retrieval 임베딩 오염을 막는다.
+    recent_summary = (getattr(ctx, "selected_context", None) or {}).get("recent_summary") or ""
+    conversation_block = (
+        "\n\n[최근 대화 맥락 — 사용자 의도 파악용 참고. 근거 인용은 아래 citation 문서에서만 한다]\n" + recent_summary
+        if recent_summary else ""
+    )
     # prior_context는 이미 question에 포함돼 있으므로 프롬프트에 중복 주입하지 않는다.
     try:
         summary = call_llm(
             summary_system,
-            "질문:" + question
+            "질문:" + question + conversation_block
             + "\n사용 가능한 citation 문서:" + json.dumps(citation_docs, ensure_ascii=False)
         )
         status = "OK"
@@ -144,42 +132,22 @@ def evidence_agent(state: ManufacturingState) -> dict:
         bundle = EvidenceArtifact(
             status="FAIL",
             retrieval_profile=rag_plan["profile"],
-            user_query=rag_plan["user_query"],
             queries=[rag_plan["search_query"]],
             documents=docs,
             citations=citations,
             evidence_summary="문서 근거 요약 생성에 실패했습니다.",
             limitations=rag_limitations + [f"evidence_summary_error: {type(e).__name__}"],
-            mode=rag_plan["mode"],
-            search_query=rag_plan["search_query"],
-            tags=rag_plan["tags"],
-            doc_whitelist=rag_plan["doc_whitelist"],
-            failure_types=rag_plan["failure_types"],
-            failure_ko=rag_plan["failure_ko"],
-            is_prediction_based=(rag_plan["mode"] == "B"),
-            supervisor_intent=getattr(plan, "intent", None),
-            feedback=feedback,
             is_retry=bool(feedback),
         )
         return {"evidence_bundle": bundle}
     bundle = EvidenceArtifact(
         status=status,
         retrieval_profile=rag_plan["profile"],
-        user_query=rag_plan["user_query"],
         queries=[rag_plan["search_query"]],
         documents=docs,
         citations=citations,
         evidence_summary=summary,
         limitations=rag_limitations,
-        mode=rag_plan["mode"],
-        search_query=rag_plan["search_query"],
-        tags=rag_plan["tags"],
-        doc_whitelist=rag_plan["doc_whitelist"],
-        failure_types=rag_plan["failure_types"],
-        failure_ko=rag_plan["failure_ko"],
-        is_prediction_based=(rag_plan["mode"] == "B"),
-        supervisor_intent=getattr(plan, "intent", None),
-        feedback=feedback,
         is_retry=bool(feedback),
     )
     return {"evidence_bundle": bundle}
@@ -229,7 +197,7 @@ class SQLAgentInput(BaseModel):
     context_summary: str = ""
 
 class SQLGeneratedQuery(BaseModel):
-    query_type: Literal["similar_incidents", "failure_history", "corrective_actions", "repeated_patterns"]
+    query_type: Literal["detail", "aggregate"]
     purpose: str = ""
     sql_query: Annotated[str, MinLen(1)]
     explanation: str = ""
@@ -274,13 +242,13 @@ SQL_TEXT_TO_SQL_EXAMPLES = [
         "response": {
             "queries": [
                 {
-                    "query_type": "failure_history",
+                    "query_type": "detail",
                     "purpose": "최근 30일 고장 이력 조회",
                     "sql_query": "SELECT id, event_date, failure_type, severity, component, symptom, root_cause, corrective_action, preventive_action, downtime_min, related_features_json, notes FROM failure_history WHERE event_date >= '2026-05-22' ORDER BY event_date DESC LIMIT 50",
                     "explanation": "최근 30일 고장 이력을 최신순으로 조회합니다.",
                 },
                 {
-                    "query_type": "corrective_actions",
+                    "query_type": "detail",
                     "purpose": "최근 30일 대응 방식 조회",
                     "sql_query": "SELECT failure_type, component, corrective_action, preventive_action, downtime_min, event_date FROM failure_history WHERE event_date >= '2026-05-22' ORDER BY downtime_min DESC, event_date DESC LIMIT 50",
                     "explanation": "고장 유형별 대응 조치와 재발 방지 조치를 조회합니다.",
@@ -294,7 +262,7 @@ SQL_TEXT_TO_SQL_EXAMPLES = [
         "response": {
             "queries": [
                 {
-                    "query_type": "similar_incidents",
+                    "query_type": "detail",
                     "purpose": "최근 TWF 유사 사례 조회",
                     "sql_query": "SELECT id, event_date, failure_type, severity, component, symptom, root_cause, corrective_action, preventive_action, downtime_min, related_features_json FROM failure_history WHERE failure_type = 'TWF' AND event_date >= '2026-05-22' ORDER BY event_date DESC LIMIT 50",
                     "explanation": "TWF 고장 유형의 최근 유사 사례와 대응 조치를 조회합니다.",
@@ -308,7 +276,7 @@ SQL_TEXT_TO_SQL_EXAMPLES = [
         "response": {
             "queries": [
                 {
-                    "query_type": "repeated_patterns",
+                    "query_type": "aggregate",
                     "purpose": "고장 유형별 반복 패턴 집계",
                     "sql_query": "SELECT failure_type, severity, component, COUNT(*) AS case_count, SUM(downtime_min) AS total_downtime_min FROM failure_history WHERE event_date >= '2026-05-22' GROUP BY failure_type, severity, component ORDER BY case_count DESC, total_downtime_min DESC LIMIT 50",
                     "explanation": "고장 유형과 부품별 반복 횟수와 다운타임을 집계합니다.",
@@ -322,7 +290,7 @@ SQL_TEXT_TO_SQL_EXAMPLES = [
         "response": {
             "queries": [
                 {
-                    "query_type": "similar_incidents",
+                    "query_type": "detail",
                     "purpose": "TWF/OSF 유사 고장 사례 조회",
                     "sql_query": "SELECT id, event_date, failure_type, severity, component, symptom, root_cause, corrective_action, preventive_action, downtime_min, related_features_json FROM failure_history WHERE failure_type IN ('TWF', 'OSF') AND event_date >= '2026-05-22' ORDER BY event_date DESC LIMIT 50",
                     "explanation": "현재 feature 진단 결과와 연결 가능한 TWF/OSF 과거 사례를 조회합니다.",
@@ -472,10 +440,9 @@ def _build_pydantic_text_to_sql_agent():
             "9. 복합 요청이면 SQLSuccess.queries에 여러 SELECT 쿼리를 넣는다.\n"
             "10. markdown code block으로 SQL을 감싸지 않는다.\n"
             "11. 존재하지 않는 컬럼이나 테이블을 만들지 않는다.\n"
-            "12. query_type은 조회 목적에 맞게 지정한다.\n"
-            "13. Supervisor가 넘긴 query_type은 참고하되, 사용자 질문과 schema에 맞게 SQL을 생성한다.\n"
-            "14. 현재 prediction failure_type이 context에 있으면 failure_type 조건이나 IN 조건으로 유사 사례를 조회할 수 있다.\n"
-            "15. 반복 패턴은 GROUP BY failure_type/component/severity를 사용하고, 대응 방식은 corrective_action/preventive_action을 조회한다.\n\n"
+            "12. query_type은 detail 또는 aggregate 중 하나로 지정한다. detail은 개별 고장 사례를 행 단위로 조회한다(failure_type/component/symptom/root_cause/corrective_action/preventive_action/downtime_min 등 컬럼 포함). aggregate는 고장 유형/부품별 집계 조회다.\n"
+            "13. aggregate는 반드시 GROUP BY(failure_type/component/severity 등)와 함께 COUNT(*) AS case_count, SUM(downtime_min) AS total_downtime_min 집계 컬럼을 사용한다. 집계가 아니면 detail로 지정한다.\n"
+            "14. Supervisor가 넘긴 query_type은 참고하되, 사용자 질문과 schema에 맞게 SQL을 생성한다. 현재 prediction failure_type이 context에 있으면 failure_type 조건이나 IN 조건으로 유사 사례를 조회할 수 있다.\n\n"
             f"Supervisor planned query_types: {ctx.deps.supervisor_query_types}\n\n"
             f"DB schema:\n{ctx.deps.schema_text}\n\n"
             f"Few-shot examples:\n{_format_text_to_sql_examples()}"
@@ -491,6 +458,9 @@ def _build_pydantic_text_to_sql_agent():
         for q in output.queries:
             try:
                 cleaned_sql = _validate_text_to_sql_query(q.sql_query, ctx.deps)
+                # aggregate는 실제 집계(GROUP BY)여야 한다 — 라벨만 aggregate이고 행 단위 SELECT면 재생성을 요구한다.
+                if q.query_type == "aggregate" and "GROUP BY" not in cleaned_sql.upper():
+                    raise ValueError("aggregate query는 GROUP BY와 COUNT/SUM 집계 컬럼을 포함해야 합니다(아니면 query_type=detail).")
             except Exception as e:
                 raise ModelRetry(f"Invalid SQL for query_type={q.query_type}: {type(e).__name__}: {e}")
             cleaned_queries.append(q.model_copy(update={"sql_query": cleaned_sql}))
@@ -601,28 +571,48 @@ def build_sql_history_artifact_from_results(results: list[SQLQueryResult], reaso
         error_message="; ".join(errors) if errors else None,
     )
 
+def _sanitize_time_range(tr: Any, reference_date: str, default_days: int) -> Any:
+    """carryover LLM이 만든 time_range의 절대날짜가 reference_date와 연도가 다르면(환각)
+    윈도우 길이는 보존하되 reference_date 기준으로 재계산한다. 절대날짜가 없으면 기본 윈도우로 보정.
+    (예: '최근 30일'을 LLM이 2023년으로 환각해도 2026 기준 최근 30일로 교정 → 빈 결과 방지)"""
+    import datetime as _d
+    def _parse(v):
+        try:
+            return _d.date.fromisoformat(str(v)[:10])
+        except Exception:
+            return None
+    ref = _parse(reference_date)
+    if ref is None or not isinstance(tr, dict):
+        return tr
+    start = _parse(tr.get("start_date") or tr.get("start"))
+    end = _parse(tr.get("end_date") or tr.get("end"))
+    if start and end:
+        if start.year == ref.year and end.year == ref.year and end <= ref:
+            return tr  # reference 연도와 일치 → 신뢰
+        span = (end - start).days
+        if span <= 0 or span > 3660:
+            span = default_days
+        return {"start_date": (ref - _d.timedelta(days=span)).isoformat(),
+                "end_date": ref.isoformat(),
+                "note": f"원래 값 {tr} 이 기준일과 불일치하여 reference_date 기준 최근 {span}일로 보정"}
+    return {"start_date": (ref - _d.timedelta(days=default_days)).isoformat(),
+            "end_date": ref.isoformat(),
+            "note": f"reference_date 기준 최근 {default_days}일"}
+
 def _build_sql_context_summary(packet: Optional[ContextPacket], state: ManufacturingState) -> str:
+    """멀티턴 맥락 요약은 공용 build_context_summary로 일원화하고(LangGraph/PydanticAI 두 채널 일치),
+    SQL 실행 전용 항목(time_range sanitize, reference_date)만 여기서 덧붙인다."""
     if not packet:
         return ""
-    blocks = []
-    carry = packet.context_carryover
-    blocks.append("현재 SQL DB는 failure_history 단일 테이블이다. 설비/자산 식별자 조건은 사용하지 않는다.")
-    if packet.recent_turns_summary:
-        blocks.append(f"참고용 최근 대화(thread context): {packet.recent_turns_summary}")
-    if packet.previous_sql_summary:
-        label = "현재 질문이 참조한 이전 SQL 이력 artifact" if (carry and carry.uses_previous_sql) else "참고용 이전 SQL 이력 artifact"
-        blocks.append(f"{label}: {packet.previous_sql_summary}")
-    if packet.previous_evidence_summary:
-        label = "현재 질문이 참조한 이전 문서 근거 artifact" if (carry and carry.uses_previous_evidence) else "참고용 이전 문서 근거 artifact"
-        blocks.append(f"{label}: {packet.previous_evidence_summary}")
-    if packet.previous_prediction_summary:
-        label = "현재 질문이 참조한 이전 위험 진단 artifact" if (carry and carry.uses_previous_prediction) else "참고용 이전 위험 진단 artifact"
-        blocks.append(f"{label}: {packet.previous_prediction_summary}")
-    if state.get("prediction_result"):
-        pred = state.get("prediction_result")
-        blocks.append(f"현재 prediction failure_types: {getattr(pred, 'failure_types', [])}; cause_features: {getattr(pred, 'cause_features', [])}")
+    summary = build_context_summary(packet, for_sql=True, prediction_result=state.get("prediction_result"))
+    blocks = [summary] if summary else []
     if packet.user_constraints:
-        blocks.append(f"현재 제약/범위: {json.dumps(packet.user_constraints, ensure_ascii=False)}")
+        constraints = dict(packet.user_constraints)
+        if constraints.get("time_range"):
+            constraints["time_range"] = _sanitize_time_range(
+                constraints["time_range"], SQL_REFERENCE_DATE, DEFAULT_SQL_DEPS.default_time_window_days)
+        blocks.append(f"현재 제약/범위: {json.dumps(constraints, ensure_ascii=False)}")
+    blocks.append(f"기준일(reference_date)은 {SQL_REFERENCE_DATE}이다. '최근/지난 N일' 같은 표현은 반드시 이 기준일로 날짜를 계산하라.")
     return "\n".join(blocks)
 
 def sql_agent(state: ManufacturingState, config: RunnableConfig = None) -> dict:
@@ -637,14 +627,12 @@ def sql_agent(state: ManufacturingState, config: RunnableConfig = None) -> dict:
     if task_params:
         context_summary = (context_summary + "\n" if context_summary else "") + f"Supervisor SQL task params: {json.dumps(task_params, ensure_ascii=False)}"
     msg = state.get("user_message", "")
-    allowed_qtypes = {"similar_incidents", "failure_history", "corrective_actions", "repeated_patterns"}
-    planned_query_types = [q for q in (task_params.get("query_types") or []) if q in allowed_qtypes]
+    planned_query_types = [q for q in (task_params.get("query_types") or []) if q in SQL_QUERY_TYPES]
     sql_intent = SQLIntentDecision(
         query_types=planned_query_types,
         failure_type=task_params.get("failure_type"),
         time_range=task_params.get("time_range"),
         filters=task_params.get("filters") or {},
-        requires_clarification=False,
         reason_summary="SupervisorPlanner task params passed to FailureHistory Text-to-SQL",
     )
     text_deps = _text_to_sql_deps_from_agent_deps(deps, planned_query_types)

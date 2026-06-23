@@ -10,18 +10,14 @@ class ConversationStore:
         self.db_path = db_path
         with self._conn() as c:
             self._drop_if_legacy(c, "turns")
-            self._drop_if_legacy(c, "machine_values")
             self._drop_if_legacy(c, "summaries")
             c.executescript("""
             CREATE TABLE IF NOT EXISTS turns(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT, thread_id TEXT, role TEXT, content TEXT, created_at TEXT);
-            CREATE TABLE IF NOT EXISTS machine_values(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT, thread_id TEXT, name TEXT, value TEXT, unit TEXT, created_at TEXT);
             CREATE TABLE IF NOT EXISTS summaries(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT, thread_id TEXT, kind TEXT, content TEXT, created_at TEXT);
+                user_id TEXT, thread_id TEXT, kind TEXT, content TEXT, created_at TEXT, turn_id TEXT);
             CREATE TABLE IF NOT EXISTS diagnosis_contexts(
                 id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
@@ -40,8 +36,8 @@ class ConversationStore:
                 PRIMARY KEY (user_id, thread_id));
             """)
             self._ensure_column(c, "turns", "thread_id", "TEXT")
-            self._ensure_column(c, "machine_values", "thread_id", "TEXT")
             self._ensure_column(c, "summaries", "thread_id", "TEXT")
+            self._ensure_column(c, "summaries", "turn_id", "TEXT")
 
     @contextmanager
     def _conn(self):
@@ -90,21 +86,18 @@ class ConversationStore:
             c.execute("INSERT INTO turns(user_id,thread_id,role,content,created_at) VALUES(?,?,?,?,?)",
                       (user_id, thread_id, role, content, self._now()))
 
-    def add_machine_values(self, user_id, values: dict, thread_id=None):
-        """Legacy observation log. Prediction input 보완에는 사용하지 않는다."""
-        with self._conn() as c:
-            for name, v in values.items():
-                unit = v.get("unit") if isinstance(v, dict) else None
-                val = v.get("value") if isinstance(v, dict) else v
-                c.execute("INSERT INTO machine_values(user_id,thread_id,name,value,unit,created_at) VALUES(?,?,?,?,?,?)",
-                          (user_id, thread_id, name, str(val), unit, self._now()))
+    # 요약 본문 길이 상한(폭주 방지). sample_rows 등을 포함한 SQL 요약이 과도하게 길어지는 것을 막는다.
+    SUMMARY_CHAR_CAP = 4000
 
-    def add_summary(self, user_id, kind, content, thread_id=None):
+    def add_summary(self, user_id, kind, content, thread_id=None, turn_id=None):
         if not content:
             return
+        content = str(content)
+        if len(content) > self.SUMMARY_CHAR_CAP:
+            content = content[: self.SUMMARY_CHAR_CAP].rstrip() + " …(truncated)"
         with self._conn() as c:
-            c.execute("INSERT INTO summaries(user_id,thread_id,kind,content,created_at) VALUES(?,?,?,?,?)",
-                      (user_id, thread_id, kind, content, self._now()))
+            c.execute("INSERT INTO summaries(user_id,thread_id,kind,content,created_at,turn_id) VALUES(?,?,?,?,?,?)",
+                      (user_id, thread_id, kind, content, self._now(), turn_id))
 
     def save_diagnosis_context(self, user_id: str, thread_id: str, context: DiagnosisContext) -> None:
         with self._conn() as c:
@@ -134,17 +127,6 @@ class ConversationStore:
             )
             self._prune_recent_contexts(c, user_id, thread_id, keep=5)
 
-    def set_active_context(self, user_id: str, thread_id: str, context_id: str) -> None:
-        with self._conn() as c:
-            c.execute(
-                """INSERT INTO context_state(user_id,thread_id,active_context_id,updated_at)
-                   VALUES(?,?,?,?)
-                   ON CONFLICT(user_id,thread_id) DO UPDATE SET
-                       active_context_id=excluded.active_context_id,
-                       updated_at=excluded.updated_at""",
-                (user_id, thread_id, context_id, self._now()),
-            )
-
     def _prune_recent_contexts(self, conn, user_id: str, thread_id: str, keep: int = 5) -> None:
         rows = conn.execute(
             "SELECT id FROM diagnosis_contexts WHERE user_id=? AND thread_id=? ORDER BY created_at DESC, rowid DESC",
@@ -156,47 +138,46 @@ class ConversationStore:
 
     # --- read ---
     def recent_turns(self, user_id, limit=8, thread_id=None) -> list[dict]:
+        # thread_id가 주어지면 그 대화로만 한정한다(다른 thread 대화 누수 방지).
+        # thread_id가 없을 때만 user 전체에서 조회한다.
         with self._conn() as c:
-            rows = []
             if thread_id:
                 rows = c.execute(
                     "SELECT role,content,created_at FROM turns WHERE user_id=? AND thread_id=? ORDER BY id DESC LIMIT ?",
                     (user_id, thread_id, limit)).fetchall()
-            if not rows:
+            else:
                 rows = c.execute(
                     "SELECT role,content,created_at FROM turns WHERE user_id=? ORDER BY id DESC LIMIT ?",
                     (user_id, limit)).fetchall()
         return [dict(r) for r in reversed(rows)]
 
-    def latest_machine_values(self, user_id, thread_id=None) -> dict[str, dict]:
-        """Legacy inspection helper. ContextManager는 이 값을 prediction input 보완에 사용하지 않는다."""
-        with self._conn() as c:
-            rows = []
-            if thread_id:
-                rows = c.execute(
-                    "SELECT name,value,unit,created_at FROM machine_values WHERE user_id=? AND thread_id=? ORDER BY id DESC",
-                    (user_id, thread_id)).fetchall()
-            if not rows:
-                rows = c.execute(
-                    "SELECT name,value,unit,created_at FROM machine_values WHERE user_id=? ORDER BY id DESC",
-                    (user_id,)).fetchall()
-        out: dict[str, dict] = {}
-        for r in rows:
-            if r["name"] not in out:
-                out[r["name"]] = {"value": r["value"], "unit": r["unit"], "created_at": r["created_at"]}
-        return out
-
     def latest_summary(self, user_id, kind, thread_id=None) -> Optional[str]:
+        # thread_id가 주어지면 그 대화로만 한정한다(다른 thread 요약 누수 방지).
         with self._conn() as c:
-            row = None
             if thread_id:
                 row = c.execute(
                     "SELECT content FROM summaries WHERE user_id=? AND thread_id=? AND kind=? ORDER BY id DESC LIMIT 1",
                     (user_id, thread_id, kind)).fetchone()
-            if row is None:
+            else:
                 row = c.execute(
                     "SELECT content FROM summaries WHERE user_id=? AND kind=? ORDER BY id DESC LIMIT 1",
                     (user_id, kind)).fetchone()
+        return row["content"] if row else None
+
+    def summary_by_turn(self, user_id, kind, turn_id, thread_id=None) -> Optional[str]:
+        """특정 과거 턴(turn_id=request_id)의 artifact 요약을 조회한다.
+        latest_summary의 '최신 1건만' 한계를 보완해, 후속질문이 특정 과거 결과를 지칭할 때 사용한다."""
+        if not turn_id:
+            return None
+        with self._conn() as c:
+            if thread_id:
+                row = c.execute(
+                    "SELECT content FROM summaries WHERE user_id=? AND thread_id=? AND kind=? AND turn_id=? ORDER BY id DESC LIMIT 1",
+                    (user_id, thread_id, kind, turn_id)).fetchone()
+            else:
+                row = c.execute(
+                    "SELECT content FROM summaries WHERE user_id=? AND kind=? AND turn_id=? ORDER BY id DESC LIMIT 1",
+                    (user_id, kind, turn_id)).fetchone()
         return row["content"] if row else None
 
     def get_active_context(self, user_id: str, thread_id: str) -> DiagnosisContext | None:

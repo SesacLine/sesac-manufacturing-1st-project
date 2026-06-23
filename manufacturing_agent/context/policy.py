@@ -6,6 +6,13 @@ from manufacturing_agent.config import *  # noqa: F401,F403
 STANDARD_FEATURES = ["type", "air_temperature", "process_temperature",
                      "rotational_speed", "torque", "tool_wear"]
 
+# 재사용한 진단 snapshot이 이 시간보다 오래됐으면 stale로 표시한다(센서값 신선도).
+STALE_THRESHOLD_SECONDS = int(os.environ.get("CONTEXT_STALE_THRESHOLD_SECONDS", "3600"))
+
+# 최근 대화 요약 토큰 폭주 방지 캡(목표: 비용/지연).
+RECENT_SUMMARY_CHAR_BUDGET = int(os.environ.get("CONTEXT_RECENT_SUMMARY_CHAR_BUDGET", "2000"))
+PER_TURN_CHAR_CAP = int(os.environ.get("CONTEXT_PER_TURN_CHAR_CAP", "300"))
+
 FEATURE_ALIASES = {
     "공기온도": "air_temperature", "air_temp": "air_temperature",
     "공정온도": "process_temperature", "process_temp": "process_temperature",

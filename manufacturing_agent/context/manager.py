@@ -1,8 +1,9 @@
 from __future__ import annotations
 from manufacturing_agent._common import *  # noqa: F401,F403
 from manufacturing_agent.config import *  # noqa: F401,F403
+from manufacturing_agent.context.engine import decide_context
 from manufacturing_agent.context.normalizer import normalize_context
-from manufacturing_agent.context.packer import _llm_context_carryover, _messages_to_recent_turns, pack_contexts, resolve_context
+from manufacturing_agent.context.packer import RECENT_TURN_WINDOW, _dedup_turns, _messages_to_recent_turns, pack_contexts
 from manufacturing_agent.context.selector import select_context
 from manufacturing_agent.contracts.context import EvidenceArtifact, PredictionResult, SQLHistoryArtifact
 from manufacturing_agent.contracts.state import ManufacturingState
@@ -39,17 +40,19 @@ def context_manager(state: ManufacturingState, config: RunnableConfig = None) ->
     if isinstance(prev_sql, dict): prev_sql = SQLHistoryArtifact.model_validate(prev_sql)
 
     selected = select_context(msg, user_id, conversation_store, structured, thread_id=thread_id)
-    selected["previous_prediction_result"] = prev_pred
     selected["previous_prediction_summary"] = _summary_from_artifact("prediction", prev_pred) or selected.get("previous_prediction_summary")
     selected["previous_evidence_summary"] = _summary_from_artifact("evidence", prev_ev) or selected.get("previous_evidence_summary")
     selected["previous_sql_summary"] = _summary_from_artifact("sql", prev_sql) or selected.get("previous_sql_summary")
 
-    checkpoint_turns = _messages_to_recent_turns(state.get("messages", []), limit=6)
+    checkpoint_turns = _messages_to_recent_turns(state.get("messages", []), limit=RECENT_TURN_WINDOW)
     if checkpoint_turns:
         selected["recent_turns"] = (selected.get("recent_turns") or []) + checkpoint_turns
-        selected["recent_turns"] = selected["recent_turns"][-8:]
-    selected["context_carryover"] = _llm_context_carryover(msg, selected)
-    selected["context_resolution"] = resolve_context(msg, selected)
+    # store 턴 + checkpoint 턴 중복 제거 후 윈도우 적용(같은 대화 이중 노출 방지).
+    selected["recent_turns"] = _dedup_turns(selected.get("recent_turns") or [])[-RECENT_TURN_WINDOW:]
+    # 단일 ContextDecision 1콜(+short-circuit)로 carryover와 resolution을 함께 판단한다.
+    decision = decide_context(msg, selected)
+    selected["context_resolution"] = decision.to_resolution()
+    selected["context_carryover"] = decision.to_carryover()
     merged, warnings = normalize_context(selected)
     packet, agent_ctx = pack_contexts(msg, merged, selected, warnings)
 

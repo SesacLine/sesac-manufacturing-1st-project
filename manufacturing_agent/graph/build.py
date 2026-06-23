@@ -4,7 +4,7 @@ from manufacturing_agent.config import *  # noqa: F401,F403
 from manufacturing_agent.agents.evidence_agent import evidence_agent, sql_agent
 from manufacturing_agent.agents.prediction_agent import prediction_agent
 from manufacturing_agent.context.manager import context_manager
-from manufacturing_agent.contracts.context import AgentContextPacket, ContextCarryoverDecision, ContextPacket, ContextResolution, ContextState, DiagnosisContext, EvidenceArtifact, ExecutionPlan, FinalAnswer, GateReport, InputDecision, InputFlags, IntakeDecision, MachineFeatureInput, MachineValue, OrchestratorDecision, OutputSafetyDecision, PredictionResult, RouteDecision, RunTrace, SQLHistoryArtifact, SQLIntentDecision, SQLQueryResult, SupervisorPlannerDecision, SupervisorReplannerDecision, TaskPatch, TaskSpec
+from manufacturing_agent.contracts.context import AgentContextPacket, ContextCarryoverDecision, ContextDecision, ContextPacket, ContextResolution, DiagnosisContext, EvidenceArtifact, ExecutionPlan, FinalAnswer, GateReport, InputDecision, InputFlags, IntakeDecision, MachineFeatureInput, MachineValue, OrchestratorDecision, OutputSafetyDecision, PredictionResult, RouteDecision, SQLHistoryArtifact, SQLIntentDecision, SQLQueryResult, SupervisorPlannerDecision, SupervisorReplannerDecision, TaskPatch, TaskSpec
 from manufacturing_agent.contracts.state import ManufacturingState
 from manufacturing_agent.gates.intake_gate import intake_gate
 from manufacturing_agent.gates.quality_gates import evidence_gate, output_safety_gate, prediction_gate, sql_gate
@@ -64,12 +64,12 @@ def build_graph(checkpointer=None):
     return g.compile(checkpointer=checkpointer)
 
 CHECKPOINT_SAFE_TYPES = (
-    MachineValue, DiagnosisContext, ContextState, ContextResolution,
-    ContextCarryoverDecision, SupervisorPlannerDecision, SQLIntentDecision,
+    MachineValue, DiagnosisContext, ContextResolution,
+    ContextCarryoverDecision, ContextDecision, SupervisorPlannerDecision, SQLIntentDecision,
     ContextPacket, AgentContextPacket, PredictionResult, EvidenceArtifact, SQLQueryResult,
     SQLHistoryArtifact, FinalAnswer, InputFlags, InputDecision, IntakeDecision,
     OutputSafetyDecision, MachineFeatureInput, TaskSpec, ExecutionPlan, TaskPatch,
-    SupervisorReplannerDecision, OrchestratorDecision, RouteDecision, GateReport, RunTrace,
+    SupervisorReplannerDecision, OrchestratorDecision, RouteDecision, GateReport,
 )
 
 def make_checkpoint_serde() -> JsonPlusSerializer:

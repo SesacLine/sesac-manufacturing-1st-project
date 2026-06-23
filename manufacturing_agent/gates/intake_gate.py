@@ -1,11 +1,11 @@
 from __future__ import annotations
 from manufacturing_agent._common import *  # noqa: F401,F403
 from manufacturing_agent.config import *  # noqa: F401,F403
-from manufacturing_agent.context.packer import _messages_to_recent_turns, _summarize_recent_turns
+from manufacturing_agent.context.packer import RECENT_TURN_WINDOW, _messages_to_recent_turns, _summarize_recent_turns
 from manufacturing_agent.context.policy import detect_injection
 from manufacturing_agent.contracts.context import GateReport, InputDecision, InputFlags, IntakeDecision
 from manufacturing_agent.contracts.state import ManufacturingState
-from manufacturing_agent.util import _json_object
+from manufacturing_agent.util import _coerce_bool, _json_object
 
 # ---------- gates/intake_gate.py (single LLM intake · service + request safety) ----------
 # 초반에는 input_gate와 safety_gate를 분리하지 않는다.
@@ -59,18 +59,6 @@ INTAKE_SYS = (
 
 _VALID_INPUT_REASONS = {"none", "empty", "injection", "gibberish", "out_of_scope"}
 _VALID_SAFETY_ACTIONS = {"ALLOW", "ANSWER_SAFELY", "BLOCK_DANGEROUS_EXECUTION", "HUMAN_HANDOFF"}
-
-def _coerce_bool(value, default: bool = False) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        low = value.strip().lower()
-        if low in {"true", "1", "yes", "y"}:
-            return True
-        if low in {"false", "0", "no", "n"}:
-            return False
-    return default
-
 
 def _normalize_intake_payload(data: dict) -> dict:
     input_reason = str(data.get("input_reason", "none")).strip().lower()
@@ -131,11 +119,6 @@ def _intake_result(state, decision: InputDecision, flags: InputFlags,
         status=status,
         route_hint="context_manager" if status == "PASS" else "final_answer",
         reason=decision.reason,
-        block=decision.blocked,
-        block_reason=decision.reason,
-        layer=decision.layer,
-        message=decision.block_message,
-        flags=flags,
         diagnostics={
             **decision.model_dump(),
             "flags": flags.model_dump(),
@@ -175,7 +158,7 @@ def intake_gate(state: ManufacturingState) -> dict:
         intake = IntakeDecision(service_allowed=False, input_reason="injection", safety_action="HUMAN_HANDOFF")
         d = InputDecision(blocked=True, reason="injection", layer="regex", block_message=BLOCK_MESSAGES["injection"])
         return _intake_result(state, d, flags, intake)
-    checkpoint_context = _summarize_recent_turns(_messages_to_recent_turns(state.get("messages", []), limit=8), limit=8, chars=160)
+    checkpoint_context = _summarize_recent_turns(_messages_to_recent_turns(state.get("messages", []), limit=RECENT_TURN_WINDOW), user_all=True)
     intake = _llm_intake(msg, context_summary=checkpoint_context)
     layer = "llm"
     # 구조화 센서 입력(데이터 입력란)이 함께 들어오면 제조 도메인·비어있지 않음이 확실하다.

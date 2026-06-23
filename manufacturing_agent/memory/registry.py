@@ -9,7 +9,7 @@ from manufacturing_agent.config import LONGTERM_DB, CHECKPOINT_DB
 
 # ConversationStore가 LONGTERM_DB 안에 두는 user_id/thread_id 종속 테이블들.
 # delete_user / delete_thread 시 CASCADE 정리 대상.
-_CONVERSATION_TABLES = ("turns", "machine_values", "summaries", "diagnosis_contexts", "context_state")
+_CONVERSATION_TABLES = ("turns", "summaries", "diagnosis_contexts", "context_state")
 # LangGraph SqliteSaver가 CHECKPOINT_DB 안에 두는 thread_id 종속 테이블들.
 _CHECKPOINT_TABLES = ("checkpoints", "writes")
 

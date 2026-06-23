@@ -26,7 +26,8 @@ def prediction_agent(state: ManufacturingState) -> dict:
     feedback = (state.get("agent_feedback") or {}).get("prediction_agent")
     packet = state.get("context_packet")
     resolution = packet.context_resolution if packet else None
-    feats = dict(ctx.selected_context.get("features", {}))
+    sel = ctx.selected_context
+    feats = dict(sel.get("features", {}))
     # 이번 턴에 명시적으로 들어온 구조화 센서 입력(데이터 입력란)은 context 해석보다 우선해 항상 반영한다.
     _structured = state.get("input_features")
     if _structured is not None:
@@ -34,11 +35,20 @@ def prediction_agent(state: ManufacturingState) -> dict:
             _structured.model_dump(exclude_none=True) if hasattr(_structured, "model_dump") else dict(_structured))
         feats.update({k: v for k, v in _sd.items() if v is not None})
     out = run_prediction(feats)
-    context_mode = ctx.selected_context.get("context_mode") or (resolution.mode if resolution else "CURRENT_ONLY")
-    base_context_id = ctx.selected_context.get("base_context_id") or (resolution.base_context_id if resolution else None)
-    changed_features = list(ctx.selected_context.get("changed_features") or (resolution.changed_features if resolution else []))
-    reused_features = list(ctx.selected_context.get("reused_features") or (resolution.reused_features if resolution else []))
-    used_stale: list[str] = []
+    # 컨텍스트 메타는 ContextResolution을 단일 출처로 사용한다(둘 다 같은 ContextDecision에서 파생되므로 동일).
+    # packet이 없을 때(context_manager 미경유)에만 agent_context로 폴백한다.
+    if resolution is not None:
+        context_mode = resolution.mode
+        base_context_id = resolution.base_context_id
+        changed_features = list(resolution.changed_features)
+        reused_features = list(resolution.reused_features)
+    else:
+        context_mode = sel.get("context_mode", "CURRENT_ONLY")
+        base_context_id = sel.get("base_context_id")
+        changed_features = list(sel.get("changed_features") or [])
+        reused_features = list(sel.get("reused_features") or [])
+    # stale은 normalizer가 계산해 agent_context["stale"]에 담아둔 결과를 그대로 보고한다(기존 하드코딩 [] 제거).
+    used_stale = list(sel.get("stale") or [])
 
     if out["full"]:
         status = "OK"
@@ -84,12 +94,10 @@ def prediction_agent(state: ManufacturingState) -> dict:
 
     result = PredictionResult(
         status=status,
-        available_features=out["present"],
         missing_features=out["missing"],
         risk_flags=risk_flags,
         failure_types=failure_types,
         cause_features=cause_features,
-        evidence_hints=out["evidence_hints"],
         safety_hints=out["safety_hints"],
         used_stale_features=used_stale,
         confidence=out["confidence"],
@@ -99,8 +107,6 @@ def prediction_agent(state: ManufacturingState) -> dict:
         base_context_id=base_context_id,
         changed_features=changed_features,
         reused_features=reused_features,
-        full_prediction_available=out["full"],
-        partial_risks=out["risks"],
     )
     result.summary = build_prediction_summary(result)
     return {"prediction_result": result}
