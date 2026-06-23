@@ -8,7 +8,6 @@ dependencies = [
     "langgraph>=0.2",
     "langgraph-checkpoint-sqlite>=2.0",
     "langchain-core>=0.3",
-    "chromadb>=0.5",
     "beautifulsoup4>=4.12",
     "pypdf>=5.0",
     "pydantic>=2.7",
@@ -20,6 +19,7 @@ dependencies = [
     "pytest>=8",
     "opentelemetry-api>=1.25",
     "opentelemetry-sdk>=1.25",
+    "pinecone>=9.1.0",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +27,3 @@ dependencies = [
 llm = ["langchain-openai>=0.2"]
 # 그래프 PNG 시각화용
 viz = ["grandalf>=0.8"]
-notebook = ["jupyter>=1.0", "ipython>=8.0"]
-# Pinecone 벡터 DB (VECTOR_BACKEND=pinecone 사용 시)
-pinecone = ["pinecone-client>=3.0"]

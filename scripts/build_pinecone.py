@@ -9,17 +9,20 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
-import sys
+import re
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.build_chroma import load_document_chunks, load_dotenv
-
+from bs4 import BeautifulSoup
 from openai import OpenAI
 from pinecone import Pinecone, ServerlessSpec
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DOCUMENT_DIR = str(PROJECT_ROOT / "document")
+CHUNK_SIZE = 1200
+CHUNK_OVERLAP = 180
 EMBED_BATCH_SIZE = 64
 UPSERT_BATCH_SIZE = 100
 DEFAULT_INDEX_NAME = "sesacline-agent-docs"
@@ -27,11 +30,111 @@ DEFAULT_EMBED_MODEL = "text-embedding-3-small"
 DIMENSION = 1536
 
 
+# ---------- .env 로더 ----------
+def load_dotenv(path: str | None = None) -> None:
+    env_path = Path(path) if path else (PROJECT_ROOT / ".env")
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+# ---------- 문서 로딩 ----------
+def doc_type(path: Path) -> str:
+    parts = {p.lower() for p in path.parts}
+    name = path.name.lower()
+    if "osha" in parts or "kosha" in parts or "safety" in name or "loto" in name or "guard" in name:
+        return "safety"
+    if "haas" in parts or "troubleshooting" in name or "diagnostic" in name:
+        return "troubleshooting"
+    return "concept"
+
+
+def read_html(path: Path) -> str:
+    raw = path.read_text(encoding="utf-8", errors="ignore")
+    soup = BeautifulSoup(raw, "html.parser")
+    for tag in soup(["script", "style", "nav", "header", "footer", "aside"]):
+        tag.decompose()
+    return soup.get_text("\n")
+
+
+def read_pdf(path: Path) -> str:
+    try:
+        from pypdf import PdfReader
+    except ImportError as e:
+        raise RuntimeError("PDF 임베딩에는 pypdf가 필요합니다. uv add pypdf 후 재시도하세요.") from e
+    reader = PdfReader(str(path))
+    return "\n".join(page.extract_text() or "" for page in reader.pages)
+
+
+def clean_text(text: str) -> str:
+    lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+    return "\n".join(line for line in lines if len(line) >= 2)
+
+
+def chunk_text(text: str) -> list[str]:
+    text = clean_text(text)
+    if not text:
+        return []
+    chunks: list[str] = []
+    start = 0
+    while start < len(text):
+        end = min(len(text), start + CHUNK_SIZE)
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        if end == len(text):
+            break
+        start = max(0, end - CHUNK_OVERLAP)
+    return chunks
+
+
+def load_document_chunks(document_dir: str = DOCUMENT_DIR) -> list[dict]:
+    root = Path(document_dir)
+    supported = sorted(
+        p for p in root.rglob("*")
+        if p.suffix.lower() in {".html", ".htm", ".pdf", ".txt", ".md"}
+    )
+    chunks: list[dict] = []
+    for path in supported:
+        suffix = path.suffix.lower()
+        if suffix in {".html", ".htm"}:
+            text = read_html(path)
+        elif suffix == ".pdf":
+            text = read_pdf(path)
+        else:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+
+        rel = path.relative_to(root).as_posix()
+        for idx, chunk in enumerate(chunk_text(text)):
+            digest = hashlib.sha1(f"{rel}:{idx}:{chunk[:80]}".encode("utf-8")).hexdigest()[:16]
+            chunks.append({
+                "id": digest,
+                "text": chunk,
+                "metadata": {
+                    "source": rel,
+                    "chunk_index": idx,
+                    "type": doc_type(path),
+                    "ext": suffix.lstrip("."),
+                },
+            })
+    return chunks
+
+
+# ---------- 임베딩 ----------
 def get_embeddings(texts: list[str], client: OpenAI, model: str) -> list[list[float]]:
     result = client.embeddings.create(input=texts, model=model)
     return [r.embedding for r in result.data]
 
 
+# ---------- 메인 ----------
 def main() -> int:
     parser = argparse.ArgumentParser(description="Upsert document chunks into Pinecone.")
     parser.add_argument("--reset", action="store_true", help="인덱스 전체 삭제 후 재빌드")
@@ -58,6 +161,7 @@ def main() -> int:
 
     print(f"Pinecone 인덱스: {index_name}")
     print(f"임베딩 모델: {embed_model}")
+    print(f"문서 경로: {DOCUMENT_DIR}")
 
     # 인덱스 존재 확인 / 생성
     existing = [idx.name for idx in pc.list_indexes()]
@@ -87,6 +191,12 @@ def main() -> int:
     if not chunks:
         print("document/ 폴더에 문서가 없습니다.")
         return 1
+
+    # type별 분포 출력
+    from collections import Counter
+    type_counts = Counter(c["metadata"]["type"] for c in chunks)
+    for t, cnt in type_counts.items():
+        print(f"  {t}: {cnt}개")
 
     # 이미 업로드된 ID 조회 (증분 빌드)
     chunk_ids = [c["id"] for c in chunks]

@@ -2,7 +2,7 @@
 from manufacturing_agent._common import *  # noqa: F401,F403
 from manufacturing_agent.config import *  # noqa: F401,F403
 from manufacturing_agent.contracts.context import PredictionResult
-from manufacturing_agent.rag.chroma import vector_search
+from manufacturing_agent.rag.pinecone_store import vector_search
 
 # ---------- services/rag_service.py ----------
 # profile -> ChromaDB type 필터 (Haas 문서는 모두 troubleshooting)
@@ -149,7 +149,7 @@ def _doc_name_matches(source: str, doc_name: str) -> bool:
 def retrieve_stage(plan: dict, k: int = 8) -> list[dict]:
     """
     Retriever.
-    Query Builder가 생성한 Search Plan을 이용하여 ChromaDB에서 문서를 검색한다.
+    Query Builder가 생성한 Search Plan을 이용하여 Pinecone에서 문서를 검색한다.
 
     수행 과정
         1. Retrieval Profile에 맞는 type filter 적용
@@ -335,7 +335,7 @@ def rag_search(question: str, profile: str, prediction: Optional[PredictionResul
         }
     """
     plan = build_query(question, profile, prediction)   # (1)
-    hits = retrieve_stage(plan, k=retrieve_k)            # (2)
+    hits = retrieve_stage(plan, k=retrieve_k)             # (2)
     ranked = rank_evidence(hits, top_k=top_k)            # (3)
     if not ranked:
         return {"plan": plan, "documents": [], "citations": [], "status": "EMPTY", "limitations": ["검색된 문서가 없습니다."]}
