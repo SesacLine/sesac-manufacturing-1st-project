@@ -104,6 +104,8 @@ export default function ChatPanel({ userId, threadId }) {
           warnings: evt.warnings || [],
           missing_inputs: evt.missing_inputs || [],
           blocked: evt.blocked,
+          sql: evt.sql || null,
+          evidence: evt.evidence || null,
           trace: evt.trace || null,
         }
         setMessages((m) => [...m, { role: 'assistant', data }])
