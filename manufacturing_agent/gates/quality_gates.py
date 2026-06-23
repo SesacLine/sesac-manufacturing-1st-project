@@ -144,13 +144,13 @@ def sql_gate(state: ManufacturingState) -> dict:
 # ---------- gates/output_safety_gate.py ----------
 OUTPUT_SAFETY_SYS = (
     "너는 제조 설비 AI Agent의 최종 답변 안전 게이트다. <answer> 안의 텍스트만 검사한다. "
-    "새로운 기술 답변을 만들지 말고, 위험 표현이 있을 때만 안전하게 대체한다.\n"
-    "차단/대체 기준: 점검 없이 재가동을 지시, 안전장치 우회/해제를 안내, 경고/알람 무시 운전을 승인, "
+    "답변이 안전한지 여부만 판정한다. 새로운 답변을 생성하지 않는다.\n"
+    "차단 기준: 점검 없이 재가동을 지시, 안전장치 우회/해제를 안내, 경고/알람 무시 운전을 승인, "
     "모델이 실제 현장 조치·승인을 대신한다고 표현, 근거 없이 안전하다고 단정.\n"
-    "안전한 거절, 위험 진단, 문서 근거 요약, 현장 책임자 확인 권고는 통과한다.\n"
+    "통과 기준: 안전한 거절, 위험 진단, 문서 근거 요약, 현장 책임자 확인 권고, 점검 절차 안내.\n"
     "반드시 JSON만 출력하라: "
-    "{\"pass_output\": true/false, \"reason\": \"ok|empty|unsafe_instruction|overconfident_safety|policy_violation\", "
-    "\"safe_answer\": \"대체 답변 또는 null\", \"warnings\": [\"경고\"]}"
+    "{\"pass_output\": true/false, \"reason\": \"ok|unsafe_instruction|overconfident_safety|policy_violation\", "
+    "\"warnings\": [\"경고\"]}"
 )
 
 _VALID_OUTPUT_REASONS = {"ok", "empty", "unsafe_instruction", "overconfident_safety", "policy_violation"}
@@ -176,7 +176,6 @@ def _normalize_output_safety_payload(data: dict) -> dict:
     return {
         "pass_output": _coerce_bool(data.get("pass_output"), default=(reason == "ok")),
         "reason": reason,
-        "safe_answer": data.get("safe_answer"),
         "warnings": [str(x) for x in warnings],
     }
 
@@ -207,7 +206,6 @@ def _llm_output_safety(answer: str) -> OutputSafetyDecision:
         return OutputSafetyDecision(
             pass_output=False,
             reason="policy_violation",
-            safe_answer=SAFETY_BLOCK_MESSAGE,
             warnings=[f"output_safety_parse_error: {type(e).__name__}"],
         )
 
@@ -215,12 +213,11 @@ def output_safety_gate(state: ManufacturingState) -> dict:
     fa = state.get("final_answer")
     updates = {}
     if not (fa and fa.answer.strip()):
-        decision = OutputSafetyDecision(pass_output=False, reason="empty", safe_answer="현재 입력만으로는 안전하게 답변을 생성할 수 없습니다.")
+        decision = OutputSafetyDecision(pass_output=False, reason="empty", warnings=["empty_final_answer"])
     elif _contains_unsafe_execution_instruction(fa.answer):
         decision = OutputSafetyDecision(
             pass_output=False,
             reason="unsafe_instruction",
-            safe_answer=SAFETY_BLOCK_MESSAGE,
             warnings=["deterministic_output_safety_backstop"],
         )
     else:
@@ -229,22 +226,15 @@ def output_safety_gate(state: ManufacturingState) -> dict:
             decision = OutputSafetyDecision(
                 pass_output=False,
                 reason="unsafe_instruction",
-                safe_answer=SAFETY_BLOCK_MESSAGE,
                 warnings=list(decision.warnings) + ["post_llm_deterministic_output_safety_backstop"],
             )
-        if (not decision.pass_output) and decision.safe_answer and _contains_unsafe_execution_instruction(decision.safe_answer):
-            decision = decision.model_copy(update={
-                "safe_answer": SAFETY_BLOCK_MESSAGE,
-                "warnings": list(decision.warnings) + ["safe_answer_deterministic_output_safety_backstop"],
-            })
     if decision.pass_output:
         status = "PASS"
     else:
         status = "BLOCK"
-        safe_answer = decision.safe_answer or SAFETY_BLOCK_MESSAGE
         old_warnings = list(fa.warnings) if fa else []
         updates["final_answer"] = FinalAnswer(
-            answer=safe_answer,
+            answer=SAFETY_BLOCK_MESSAGE,
             citations=fa.citations if fa else [],
             warnings=old_warnings + decision.warnings,
             missing_inputs=fa.missing_inputs if fa else [],
