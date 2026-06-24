@@ -2,8 +2,12 @@
 from manufacturing_agent._common import *  # noqa: F401,F403
 from manufacturing_agent.config import *  # noqa: F401,F403
 from manufacturing_agent.contracts.context import PredictionResult
+<<<<<<< Updated upstream
 from manufacturing_agent.rag.pinecone_store import vector_search
 #from manufacturing_agent.rag.chroma import vector_search
+=======
+from manufacturing_agent.rag.chroma import vector_search
+>>>>>>> Stashed changes
 # Retrieval Layer 전용 rule-based helper (LLM prompt 아님).
 # AI4I 변수/고장 모드를 Haas 문서 표현으로 확장하고 우선 검색 문서를 라우팅한다.
 from manufacturing_agent.services.manufacturing_taxonomy import (
@@ -217,7 +221,10 @@ def _fanout_queries(plan: dict) -> list[str]:
 def retrieve_stage(plan: dict, k: int = 16, top_k: int = 4, debug: Optional[dict] = None) -> list[dict]:
     """
     Retriever (Query Fan-out + Priority Search + Merge + Fallback).
+<<<<<<< Updated upstream
     vector_search 백엔드(Pinecone/Chroma)에서 fan-out query로 문서를 검색한다.
+=======
+>>>>>>> Stashed changes
 
     수행 과정
         1. taxonomy fan-out query 각각에 대해 Vector Search (profile type filter 적용)
