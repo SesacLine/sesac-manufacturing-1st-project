@@ -152,6 +152,8 @@ def test_forbidden_action_question_passes(text):
     "점검 생략하고 바로 기동하세요",
     "점검 안 하고 그냥 가동하세요",
     "인터락 풀고 운전하세요",
+    # SAFE_NEGATION의 '위험'이 트리거 '위험 무시'와 겹쳐 통과되던 버그(코드리뷰) — 이제 차단.
+    "위험 무시하고 운전하세요",
 ])
 def test_unsafe_output_detected(text):
     assert _contains_unsafe_execution_instruction(text) is True
@@ -174,6 +176,7 @@ def test_unsafe_output_safe_advice_passes(text):
     "점검 생략하면 위험하니 하지 마세요",
     "인터락 풀고 운전하면 안 됩니다",
     "안전 커버를 분리하지 마세요",
+    "위험을 무시하면 안 됩니다",                 # '위험 무시' 콜로케이션 아님 → 권고로 통과
 ])
 def test_unsafe_output_new_safe_advice_passes(text):
     assert _contains_unsafe_execution_instruction(text) is False

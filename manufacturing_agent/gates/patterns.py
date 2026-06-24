@@ -51,4 +51,6 @@ OUTPUT_FORBIDDEN_PATTERNS = [
 ]
 
 # output_safety_gate: 매치 주변 부정/경고어 → 안전 권고로 보고 통과(오차단 방지)
-SAFE_NEGATION = re.compile(r"피하|하지\s*마|마라|마세요|말아|금지|않|불가|위험|안\s*됩니다|안\s*돼|삼가|자제|주의")
+# 단 '위험'은 OUTPUT_FORBIDDEN_PATTERNS의 '위험 무시' 트리거와 겹치므로, '위험 무시' 콜로케이션은
+# 부정어로 보지 않는다(그렇지 않으면 "위험 무시하고 운전하세요"가 안전 권고로 오인되어 통과됨).
+SAFE_NEGATION = re.compile(r"피하|하지\s*마|마라|마세요|말아|금지|않|불가|위험(?!\s*무시)|안\s*됩니다|안\s*돼|삼가|자제|주의")
