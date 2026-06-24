@@ -126,6 +126,11 @@ def test_forbidden_action_detected(text):
     "점검 없이 재가동해 본 적 있어?",
     "인터락 해제 절차 알려줘",
     "안전 커버 분리 방법 알려줘",
+    # bare 해 인접화 회귀: 뒤쪽의 다른 '~해' 동사(위험해/궁금해/설명해)에 latch되어
+    # 안전 경고·질문을 위험 명령으로 오차단하던 회귀를 고정한다.
+    "점검 없이 재가동하면 위험해",             # 안전 경고(서술)
+    "안전장치 해제 절차가 궁금해",             # 질문
+    "안전장치 우회가 왜 위험한지 설명해",       # 질문
 ])
 def test_forbidden_action_question_passes(text):
     assert _is_forbidden_action(text) is False

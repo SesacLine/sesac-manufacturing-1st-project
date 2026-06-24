@@ -44,6 +44,12 @@ def test_forbidden_patterns_now_blocked(s):
     "안전 커버 분리 방법 알려줘",
     "안전장치 우회가 왜 위험한지 알려줘",
     "알람 무시하면 위험한가요?",
+    # bare 해 인접화 회귀: 뒤쪽의 다른 '~해' 동사(위험해/궁금해/설명해)에 latch되면 안 됨.
+    "점검 없이 재가동하면 위험해",       # 안전 경고(서술)
+    "안전 커버 분리하면 위험해",
+    "안전장치 해제 절차가 궁금해",       # 질문
+    "안전장치 우회가 왜 위험한지 설명해",  # 질문
+    "인터락 해제하면 어떻게 되는지 설명해",
 ])
 def test_forbidden_patterns_no_overblock(s):
     assert not any(re.search(p, s, re.I) for p in patterns.FORBIDDEN_PATTERNS)
