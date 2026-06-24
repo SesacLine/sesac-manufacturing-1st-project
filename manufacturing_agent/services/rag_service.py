@@ -20,14 +20,12 @@ from manufacturing_agent.services.manufacturing_taxonomy import (
 RETRIEVAL_PROFILES = {
     "troubleshooting_rag": "troubleshooting", # mode A: 단순 검색
     "prediction_plus_rag": "troubleshooting", # mode B: 예측 기반 검색
-    "safety_procedure_rag": None,              # 안전/LOTO/재가동은 safety/html 문서를 함께 검색
     "fallback_broad": None,                    # 재검색은 type filter 없이 범위 확대
 }
 HAAS_SOURCE_PREFIXES = ("haas/", "document/haas/")
 SOURCE_PREFIX_POLICY = {
     "troubleshooting_rag": HAAS_SOURCE_PREFIXES,
     "prediction_plus_rag": HAAS_SOURCE_PREFIXES,
-    "safety_procedure_rag": ("osha/", "kosha/", "haas/", "document/osha/", "document/kosha/", "document/haas/"),
     "fallback_broad": None,
 }
 

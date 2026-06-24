@@ -595,16 +595,8 @@ Final Answer
   검색 chunk(id/source/page/score), fallback 발생 여부를 stderr로 출력.
   (`rag_search` 반환값의 `debug` 키에도 동일 페이로드가 들어간다.)
 
-## 알려진 한계 — 한국어 safety 코퍼스 off-topic (시나리오 S12)
+## 코퍼스 범위
 
-- 증상: "용접 로봇 토치 케이블 교체 주기"처럼 코퍼스에 없는 한국어 질의가,
-  gate 재시도로 `fallback_broad` 프로파일을 타면 kosha 일반 진단지침(M-131 등)이
-  score ~0.45 경계에서 매칭되어 NO_EVIDENCE를 우회하는 경우가 있다.
-- 원인: text-embedding-3-small이 **한국어 질의 vs 한국어 kosha 문서**의 의미적 관련도를
-  0.42~0.49 좁은 대역에서 잘 구분하지 못한다. 실측상 정상 안전질의("점검 없이 재가동 위험" ≈ 0.469)가
-  off-topic("용접 로봇" ≈ 0.491)보다 **낮게** 나오기도 한다.
-- 결론: **legit/off-topic을 가르는 깨끗한 score threshold가 존재하지 않는다.**
-  threshold를 올리면 정상 안전자문(R1)이 NO_EVIDENCE로 깨지므로, threshold 상향은 채택하지 않았다.
-- 현재 방침: `MIN_EVIDENCE_SCORE=0.45` 유지. 영문 Haas troubleshooting 경로의 NO_EVIDENCE는 정상 동작하며,
-  한국어 safety 코퍼스의 off-topic 구분은 본 한계로 둔다.
-- 근본 해결(향후): cross-encoder reranker 도입 또는 safety 코퍼스 content 필터링이 필요하다(별도 작업).
+- 코퍼스는 **haas PDF 전용**이다(Mechanical Service Manual / Mill Spindle / Mill Chatter).
+  osha/kosha 안전문서 및 `safety_procedure_rag` 프로파일·`safety_guidance` intent는 제거되었다.
+- NO_EVIDENCE 임계값 `MIN_EVIDENCE_SCORE`(기본 0.45)는 off-topic 질의를 차단한다.

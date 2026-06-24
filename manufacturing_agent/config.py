@@ -75,7 +75,6 @@ EMBED_DIM = int(os.environ.get("OPENAI_EMBED_DIM", "1536"))
 RECURSION_LIMIT      = int(os.environ.get("RECURSION_LIMIT", "50"))      # LangGraph 실행 스텝 상한
 TASK_MAX_RETRIES     = int(os.environ.get("TASK_MAX_RETRIES", "2"))      # worker gate RETRYABLE_FAIL 재시도 예산
 TASK_MAX_RERUNS      = int(os.environ.get("TASK_MAX_RERUNS", "2"))       # targeted replan rerun 예산
-RAG_K_SAFETY         = int(os.environ.get("RAG_K_SAFETY", "20"))         # safety_procedure_rag 검색 문서 수
 RAG_K_DEFAULT        = int(os.environ.get("RAG_K_DEFAULT", "16"))        # 기본 RAG 검색 문서 수
 RAG_K_FALLBACK       = int(os.environ.get("RAG_K_FALLBACK", "8"))        # gate feedback 후 보완검색 문서 수
 RECENT_CONTEXT_KEEP  = int(os.environ.get("RECENT_CONTEXT_KEEP", "5"))   # thread별 보관하는 DiagnosisContext 수

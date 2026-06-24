@@ -5,10 +5,10 @@
 - 임베딩 함수/컬렉션 이름/거리 공간은 `manufacturing_agent/rag/chroma.py` 런타임과 동일하게 맞춘다.
 
 코퍼스 정책 (사용자 확정)
-- 포함: document/haas 의 3대 핵심 PDF (Mechanical Service Manual, Mill Spindle, Mill Chatter)
-        + document/osha, document/kosha (안전 RAG 유지)
+- 포함: document/haas 의 3대 핵심 PDF (Mechanical Service Manual, Mill Spindle, Mill Chatter) 전용
 - 제외: document/haas_backup/ (옛 HTML 중복 + Vector Drive)
         document/haas 의 "Mill Accuracy" PDF (taxonomy 3대 핵심에 없음)
+        (osha/kosha 안전문서는 코퍼스에서 제거됨)
 - reset=True 로 옛 stale 청크를 제거하고 새로 임베딩한다.
 
 실행:

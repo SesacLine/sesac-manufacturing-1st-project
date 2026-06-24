@@ -36,8 +36,8 @@ PINECONE_REGION=us-east-1                   # (선택)
 
 ## 2. 코퍼스 ingest (1회, 문서 바뀌면 재실행)
 
-대상 코퍼스: `document/haas` 3종(Mechanical Service / Mill Spindle / Mill Chatter) + `osha`/`kosha` 안전문서.
-(haas_backup, Mill Accuracy는 제외)
+대상 코퍼스: `document/haas` PDF 3종(Mechanical Service / Mill Spindle / Mill Chatter)만.
+(osha/kosha 안전문서, haas_backup, Mill Accuracy는 제외)
 
 **Pinecone:**
 ```bash

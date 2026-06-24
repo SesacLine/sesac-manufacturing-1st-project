@@ -1,7 +1,7 @@
 """RAG 코퍼스를 Pinecone에 업서트(ingest)한다.
 
 `pinecone_store.vector_search`(런타임 검색)와 동일한 메타데이터/임베딩을 쓰도록 맞춘다.
-- 코퍼스 로딩/청킹/제외 규칙은 `reembed_corpus.py`를 그대로 재사용한다(haas 3종 + osha/kosha).
+- 코퍼스 로딩/청킹/제외 규칙은 `reembed_corpus.py`를 그대로 재사용한다(haas PDF 3종 전용).
 - OpenAI 임베딩(text-embedding-3-small, 1536) -> Pinecone(cosine) upsert.
 - 인덱스가 없으면 자동 생성한다.
 

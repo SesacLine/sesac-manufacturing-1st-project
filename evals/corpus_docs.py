@@ -12,19 +12,11 @@
 from __future__ import annotations
 
 # doc_key -> (사람이 읽는 이름, 매칭 토큰[전부 포함되면 매칭])
+# 코퍼스 = haas PDF 전용 (osha/kosha 안전문서는 제거됨).
 CORPUS_DOCS: dict[str, tuple[str, list[str]]] = {
-    # --- haas (PDF) ---
     "haas_mechanical_service": ("Haas Mechanical Service Manual (PDF)", ["mechanical", "service", "manual"]),
     "haas_mill_spindle":       ("Haas Mill Spindle Troubleshooting (PDF)", ["haascnc.com", "mill", "spindle"]),
     "haas_mill_chatter":       ("Haas Mill Chatter Troubleshooting (PDF)", ["haascnc.com", "mill", "chatter"]),
-    # --- kosha (PDF, 안전) ---
-    "kosha_loto_b_m_25":       ("KOSHA B-M-25 LOTO 잠금·표지", ["b-m-25"]),
-    "kosha_control_parts_m_192": ("KOSHA M-192 안전관련 부품 설계", ["m-192"]),
-    "kosha_mttfd_m_191":       ("KOSHA M-191 MTTFd", ["m-191"]),
-    "kosha_cnc_lathe_m_1":     ("KOSHA M-1 CNC선반 가공물 위험방지", ["m-1-2013"]),
-    "kosha_lube_m_114":        ("KOSHA M-114 윤활유 분석 고장진단", ["m-114"]),
-    "kosha_fault_m_131":       ("KOSHA M-131 결함진단 자료해석", ["m-131"]),
-    "kosha_condmon_m_121":     ("KOSHA M-121 상태감시·진단", ["m-121"]),
 }
 
 

@@ -44,8 +44,6 @@ def _pick_profile(plan: Optional[ExecutionPlan], pred: Optional[PredictionResult
     """ExecutionPlan intent와 진단 결과를 함께 보고 RAG 검색 프로파일을 결정한다."""
     if pred and (getattr(pred, "risk_flags", None) or getattr(pred, "failure_types", None)):
         return "prediction_plus_rag"
-    if plan and plan.intent == "safety_guidance":
-        return "safety_procedure_rag"
     return "troubleshooting_rag"
 
 
@@ -70,7 +68,7 @@ def evidence_agent(state: ManufacturingState) -> dict:
         prior_context.append(f"이전 SQL 이력 요약: {prior['sql_summary']}")
     if prior_context:
         question = f"{question}\n\n[이전 턴 컨텍스트]\n" + "\n".join(prior_context)
-    k = RAG_K_SAFETY if profile == "safety_procedure_rag" else RAG_K_DEFAULT
+    k = RAG_K_DEFAULT
     if feedback:
         profile = "fallback_broad"
         k = RAG_K_FALLBACK
