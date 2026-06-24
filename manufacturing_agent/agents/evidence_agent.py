@@ -44,8 +44,6 @@ def _pick_profile(plan: Optional[ExecutionPlan], pred: Optional[PredictionResult
     """ExecutionPlan intent와 진단 결과를 함께 보고 RAG 검색 프로파일을 결정한다."""
     if pred and (getattr(pred, "risk_flags", None) or getattr(pred, "failure_types", None)):
         return "prediction_plus_rag"
-    if plan and plan.intent == "safety_guidance":
-        return "safety_procedure_rag"
     return "troubleshooting_rag"
 
 
@@ -70,7 +68,7 @@ def evidence_agent(state: ManufacturingState) -> dict:
         prior_context.append(f"이전 SQL 이력 요약: {prior['sql_summary']}")
     if prior_context:
         question = f"{question}\n\n[이전 턴 컨텍스트]\n" + "\n".join(prior_context)
-    k = RAG_K_SAFETY if profile == "safety_procedure_rag" else RAG_K_DEFAULT
+    k = RAG_K_DEFAULT
     if feedback:
         profile = "fallback_broad"
         k = RAG_K_FALLBACK
@@ -80,16 +78,29 @@ def evidence_agent(state: ManufacturingState) -> dict:
     rag_plan, docs, citations = result["plan"], result["documents"], result["citations"]
     rag_status = result.get("status") or ("OK" if docs else "EMPTY")
     rag_limitations = list(result.get("limitations") or [])
+    # NO_EVIDENCE: 추측 차단 + 담당자 확인 안내 (retrieval layer가 생성한 guidance를 그대로 전달)
+    rag_guidance = result.get("guidance")
 
     if not docs:
+        # NO_EVIDENCE(또는 결과 없음)는 계약상 status="EMPTY"로 닫되, 사용자 안내 문구로 담당자 확인을 노출한다.
         bundle = EvidenceArtifact(
             status="EMPTY",
             retrieval_profile=rag_plan["profile"],
             queries=[rag_plan["search_query"]],
             documents=[],
             citations=[],
-            evidence_summary="관련 문서 근거를 찾지 못했습니다.",
-            limitations=rag_limitations or ["검색된 문서가 없어 근거 기반 단정은 제한됩니다."],
+            evidence_summary=rag_guidance or "관련 문서 근거를 찾지 못했습니다.",
+            limitations=(rag_limitations + (["NO_EVIDENCE"] if rag_status == "NO_EVIDENCE" else []))
+                        or ["검색된 문서가 없어 근거 기반 단정은 제한됩니다."],
+            mode=rag_plan["mode"],
+            search_query=rag_plan["search_query"],
+            tags=rag_plan["tags"],
+            doc_whitelist=rag_plan["doc_whitelist"],
+            failure_types=rag_plan["failure_types"],
+            failure_ko=rag_plan["failure_ko"],
+            is_prediction_based=(rag_plan["mode"] == "B"),
+            supervisor_intent=getattr(plan, "intent", None),
+            feedback=feedback,
             is_retry=bool(feedback),
         )
         return {"evidence_bundle": bundle}

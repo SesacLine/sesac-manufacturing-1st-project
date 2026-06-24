@@ -1,14 +1,5 @@
-{"id": "rag_spindle_overheat", "split": "clear", "query": "스핀들 베어링이 과열되는데 점검 절차와 윤활 확인 방법", "profile": "troubleshooting_rag", "relevant_doc_ids": ["haas/Mill Spindle - Troubleshooting Guide - TG0101"], "k": 16}
-{"id": "rag_chatter", "split": "clear", "query": "공구 마모와 밀 채터(chatter) 점검 방법", "profile": "troubleshooting_rag", "relevant_doc_ids": ["haas/Mill Chatter - Troubleshooting - TG0100"], "k": 16}
-{"id": "rag_loto", "split": "clear", "query": "에너지 차단장치 잠금·표지(LOTO) 절차와 점검 주기", "profile": "safety_procedure_rag", "relevant_doc_ids": ["kosha/B-M-25-2026 에너지 차단장치의 잠금·표지에 관한 기술지원규정"], "k": 16}
-{"id": "rag_vector_drive", "split": "clear", "query": "벡터 드라이브 전원/구동 이상 진단", "profile": "troubleshooting_rag", "relevant_doc_ids": ["haas/Vector Drive - Troubleshooting Guide - CHC - TG0157", "haas/Vector Drive - Troubleshooting Guide - NGC - TG0158"], "k": 16}
-{"id": "rag_emergency_stop", "split": "adversarial", "query": "안전 한계를 벗어났을 때 비상 정지와 동력 차단 요건", "profile": "safety_procedure_rag", "relevant_doc_ids": ["kosha/M-192-2017 기계안전을 위한 제어시스템의 안전관련부품류 설계 기술지침", "kosha/M-191-2017 안전제어시스템 설계를 위한 평균위험고장시간(MTTFd) 계산지침"], "k": 20}
-{"id": "rag_machine_guarding", "split": "adversarial", "query": "기계 방호장치 설치 기준", "profile": "safety_procedure_rag", "relevant_doc_ids": ["osha/machine_guarding_1910_212", "osha/machine_guarding_overview"], "k": 16}
-{"id": "rag_cnc_lathe_safety", "split": "holdout", "query": "CNC 선반에서 날아오는 가공물 위험 방지", "profile": "safety_procedure_rag", "relevant_doc_ids": ["kosha/M-1-2013 CNC 선반의 날아오는 가공물 등에 의한 위험방지 기술지침"], "k": 16}
-{"id": "rag_out_of_corpus", "split": "holdout", "query": "용접 로봇 토치 케이블 교체 주기", "profile": "troubleshooting_rag", "relevant_doc_ids": [], "k": 16, "note": "코퍼스 미보유 → 정답 문서 없음(생성단 정직성으로 평가)."}
-{"id": "rag_vector_ngc", "split": "clear", "query": "NGC 벡터 드라이브 오류 코드 진단", "profile": "troubleshooting_rag", "relevant_doc_ids": ["haas/Vector Drive - Troubleshooting Guide - NGC - TG0158"], "k": 16}
-{"id": "rag_chatter_detail", "split": "clear", "query": "밀 채터 원인과 절삭 조건 조정", "profile": "troubleshooting_rag", "relevant_doc_ids": ["haas/Mill Chatter - Troubleshooting - TG0100"], "k": 16}
-{"id": "rag_mttfd", "split": "adversarial", "query": "안전제어시스템 평균위험고장시간 MTTFd 계산", "profile": "safety_procedure_rag", "relevant_doc_ids": ["kosha/M-191-2017 안전제어시스템 설계를 위한 평균위험고장시간(MTTFd) 계산지침"], "k": 16}
-{"id": "rag_control_safety_parts", "split": "clear", "query": "기계안전 제어시스템 안전관련 부품 설계", "profile": "safety_procedure_rag", "relevant_doc_ids": ["kosha/M-192-2017 기계안전을 위한 제어시스템의 안전관련부품류 설계 기술지침"], "k": 16}
-{"id": "rag_spindle_runout", "split": "adversarial", "query": "스핀들 런아웃 점검 방법", "profile": "troubleshooting_rag", "relevant_doc_ids": ["haas/Mill Spindle - Troubleshooting Guide - TG0101"], "k": 16}
-{"id": "rag_loto_overview2", "split": "clear", "query": "잠금 표지 장치 점검 주기와 승인 작업자", "profile": "safety_procedure_rag", "relevant_doc_ids": ["kosha/B-M-25-2026 에너지 차단장치의 잠금·표지에 관한 기술지원규정"], "k": 16}
+{"id": "rag_spindle_overheat", "split": "clear", "query": "스핀들 베어링이 과열되는데 점검 절차와 윤활 확인 방법", "profile": "troubleshooting_rag", "relevant_doc_ids": ["haas/haascnc.com-Mill Spindle - Troubleshooting Guide"], "k": 32}
+{"id": "rag_chatter", "split": "clear", "query": "공구 마모와 밀 채터(chatter) 점검 방법", "profile": "troubleshooting_rag", "relevant_doc_ids": ["haas/haascnc.com-Mill Chatter - Troubleshooting - TG0100"], "k": 32}
+{"id": "rag_out_of_corpus", "split": "holdout", "query": "용접 로봇 토치 케이블 교체 주기", "profile": "troubleshooting_rag", "relevant_doc_ids": [], "k": 32, "note": "코퍼스 미보유 → 정답 문서 없음(생성단 정직성으로 평가)."}
+{"id": "rag_chatter_detail", "split": "clear", "query": "밀 채터 원인과 절삭 조건 조정", "profile": "troubleshooting_rag", "relevant_doc_ids": ["haas/haascnc.com-Mill Chatter - Troubleshooting - TG0100"], "k": 32}
+{"id": "rag_spindle_runout", "split": "adversarial", "query": "스핀들 런아웃 점검 방법", "profile": "troubleshooting_rag", "relevant_doc_ids": ["haas/haascnc.com-Mill Spindle - Troubleshooting Guide"], "k": 32}

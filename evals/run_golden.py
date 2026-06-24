@@ -157,21 +157,20 @@ def eval_sql():
     return {"n": len(cases), "real_invariant통과": f"{real_ok}/{real_n}", "안전거절률": f"{safe_ok}/{safe_n}"}
 
 
-# ---------- rag ----------
-def _norm(s): return re.sub(r"\.(html?|pdf)$", "", str(s or "").strip(), flags=re.I)
+# ---------- rag (rag_retrieval_eval 의 로직 재사용 — 단일 소스) ----------
+from rag_retrieval_eval import ranked_sources, metrics, PASS_RECALL
 def eval_rag():
     cases = load("rag_retrieval.jsonl"); rec=[]; mrr=[]
     for c in cases:
-        rel = set(c.get("relevant_doc_ids") or [])
+        rel = list(c.get("relevant_doc_ids") or [])
         if not rel: continue
-        k = int(c.get("k",16))
-        r = rag_search(c["query"], profile=c.get("profile","troubleshooting_rag"), retrieve_k=k)
-        ranked = [_norm(d.get("source")) for d in (r.get("documents") or [])][:k]
-        hit = set(ranked) & rel
-        r_ = len(hit)/len(rel); rec.append(r_)
-        m = next((1.0/i for i,s in enumerate(ranked,1) if s in rel), 0.0); mrr.append(m)
-        flag = "" if r_ >= 0.5 else "  ✗"
-        print(f"   · rag {c['id']:<22} R={r_:.2f} MRR={m:.2f}{flag}" + (f" missed={sorted(rel-set(ranked))}" if rel-set(ranked) else ""))
+        k = int(c.get("k", 16))
+        ranked = ranked_sources(c["query"], k, c.get("profile", "troubleshooting_rag"))
+        m = metrics(ranked, rel, k)
+        rec.append(m["recall"]); mrr.append(m["mrr"])
+        flag = "" if (m["recall"] or 0) >= PASS_RECALL else "  ✗"
+        print(f"   · rag {c['id']:<22} R={m['recall']:.2f} MRR={m['mrr']:.2f}{flag}"
+              + (f" missed={m['missed']}" if m["missed"] else ""))
     return {"n": len(cases), "scored": len(rec), "Recall@k": round(sum(rec)/len(rec),2) if rec else None,
             "MRR": round(sum(mrr)/len(mrr),2) if mrr else None}
 

@@ -32,13 +32,12 @@ SUPERVISOR_PLANNER_SYS = (
     "- '최근 30일 고장 이력과 대응 방식을 조회해서 요약해줘'처럼 DB 이력 조회만 요청하면 sql=true, evidence=false, prediction=false.\n"
     "- '최근 TWF 사례에서 어떤 조치를 했어?'는 sql=true이며 sql_query_intents에는 detail을 포함한다.\n"
     "- '고장 유형별 반복 패턴과 다운타임을 정리해줘'는 sql=true이며 sql_query_intents에는 aggregate를 포함한다.\n"
-    "- '점검 없이 재가동해도 돼? 왜 위험한지 매뉴얼 근거와 안전 절차를 알려줘'는 safety_guidance이며 evidence=true, prediction=false, sql=false.\n"
     "- '현재 위험 진단, 과거 유사 사례, 점검 문서 근거까지'는 prediction=true, sql=true, evidence=true. sql_query_intents에는 detail을 포함한다.\n"
     "- '현재 고장 여부, 과거 사례의 조치, 해결 방법, 근거 문서'처럼 현재/과거/근거 산출물이 섞이면 prediction=true, sql=true, evidence=true.\n"
     "- '방금 근거 기준으로 더 구체화'처럼 이전 evidence artifact를 참조하면 evidence=true. '방금 조회한 고장 유형 중 HIGH만'처럼 이전 SQL artifact를 참조하면 sql=true.\n"
     "- '방금 이력에서 진행됐던 재발 방지/대응 조치를 더 자세히 알려줘'처럼 직전 SQL 결과의 조치를 이어 물으면 sql=true, evidence=false. sql_query_intents에는 detail을 포함한다.\n"
     "반드시 JSON만 출력하라: "
-    "{\"intent\": \"prediction_diagnosis|document_qa|history_lookup|combined_analysis|safety_guidance|general_manufacturing\", "
+    "{\"intent\": \"prediction_diagnosis|document_qa|history_lookup|combined_analysis|general_manufacturing\", "
     "\"needs_prediction\": true/false, \"needs_evidence\": true/false, \"needs_sql\": true/false, "
     "\"evidence_required\": true/false, \"sql_query_intents\": [\"detail|aggregate\"], "
     "\"evidence_focus\": [\"검색/근거 초점\"], \"reason_summary\": \"짧은 이유\", \"confidence\": 0.0}"
@@ -46,7 +45,7 @@ SUPERVISOR_PLANNER_SYS = (
 
 _PLANNER_INTENTS = {
     "prediction_diagnosis", "document_qa", "history_lookup",
-    "combined_analysis", "safety_guidance", "general_manufacturing",
+    "combined_analysis", "general_manufacturing",
 }
 
 
@@ -79,7 +78,7 @@ def _normalize_planner_decision(decision: SupervisorPlannerDecision,
     if not any(needs):
         updates.update(needs_evidence=True, intent="general_manufacturing")
         needs = [needs[0], True, needs[2]]
-    if sum(bool(x) for x in needs) > 1 and decision.intent not in {"combined_analysis", "safety_guidance"}:
+    if sum(bool(x) for x in needs) > 1 and decision.intent not in {"combined_analysis"}:
         updates["intent"] = "combined_analysis"
     return decision.model_copy(update=updates) if updates else decision
 
@@ -121,8 +120,6 @@ def _llm_supervisor_planner_decision(state: ManufacturingState) -> SupervisorPla
 
 
 def _planner_retrieval_profile(decision: SupervisorPlannerDecision) -> str:
-    if decision.intent == "safety_guidance":
-        return "safety_procedure_rag"
     if decision.needs_prediction:
         return "prediction_plus_rag"
     return "troubleshooting_rag"

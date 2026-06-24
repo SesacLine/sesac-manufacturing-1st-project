@@ -61,17 +61,50 @@ LONGTERM_DB = os.path.join(DATA_DIR, "longterm_memory.sqlite")   # 장기 메모
 CHECKPOINT_DB = os.path.join(DATA_DIR, "checkpoints.sqlite")     # 장기 체크포인터(SqliteSaver)
 CHROMA_DIR = os.path.join(DATA_DIR, "chroma")                    # 벡터 스토어
 
+# ---- 벡터 백엔드 (chroma | pinecone) ----
+# rag_service는 vector_search를 import해 쓰며, 백엔드 전환은 이 설정과 import 경로로만 결정된다.
+VECTOR_BACKEND = os.environ.get("VECTOR_BACKEND", "chroma").lower()
+PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY", "")
+PINECONE_INDEX_NAME = os.environ.get("PINECONE_INDEX_NAME", "sesacline-agent-docs")
+PINECONE_CLOUD = os.environ.get("PINECONE_CLOUD", "aws")
+PINECONE_REGION = os.environ.get("PINECONE_REGION", "us-east-1")
+# text-embedding-3-small=1536, text-embedding-3-large=3072 (Pinecone 인덱스 차원과 일치해야 함)
+EMBED_DIM = int(os.environ.get("OPENAI_EMBED_DIM", "1536"))
+
 # 오케스트레이션/검색 튜닝 노브 (.env로 override 가능)
 RECURSION_LIMIT      = int(os.environ.get("RECURSION_LIMIT", "50"))      # LangGraph 실행 스텝 상한
 TASK_MAX_RETRIES     = int(os.environ.get("TASK_MAX_RETRIES", "2"))      # worker gate RETRYABLE_FAIL 재시도 예산
 TASK_MAX_RERUNS      = int(os.environ.get("TASK_MAX_RERUNS", "2"))       # targeted replan rerun 예산
-RAG_K_SAFETY         = int(os.environ.get("RAG_K_SAFETY", "20"))         # safety_procedure_rag 검색 문서 수
 RAG_K_DEFAULT        = int(os.environ.get("RAG_K_DEFAULT", "16"))        # 기본 RAG 검색 문서 수
 RAG_K_FALLBACK       = int(os.environ.get("RAG_K_FALLBACK", "8"))        # gate feedback 후 보완검색 문서 수
 RECENT_CONTEXT_KEEP  = int(os.environ.get("RECENT_CONTEXT_KEEP", "5"))   # thread별 보관하는 DiagnosisContext 수
 MEMORY_SUMMARY_CHAR_CAP = int(os.environ.get("SUMMARY_CHAR_CAP", "4000"))  # 장기메모리 요약 본문 길이 상한
+# ---- 근거 없음(NO_EVIDENCE) 시 사용자에게 안내할 담당자 연락처 ----
+# 하드코딩하지 않고 .env / 환경변수에서 읽는다. 미설정 시 일반 안내만 노출.
+SUPPORT_CONTACT_NAME = os.environ.get("SUPPORT_CONTACT_NAME", "설비 정비 담당자")
+SUPPORT_CONTACT_EMAIL = os.environ.get("SUPPORT_CONTACT_EMAIL", "")
+SUPPORT_CONTACT_PHONE = os.environ.get("SUPPORT_CONTACT_PHONE", "")
+
+
+def support_contact_text() -> str:
+    """NO_EVIDENCE 안내 문구에 붙일 담당자 연락처 한 줄(설정된 항목만)."""
+    parts = []
+    if SUPPORT_CONTACT_NAME:
+        parts.append(SUPPORT_CONTACT_NAME)
+    contacts = [c for c in (SUPPORT_CONTACT_EMAIL, SUPPORT_CONTACT_PHONE) if c]
+    base = "담당자: " + (" / ".join(parts) if parts else "설비 정비 담당자")
+    if contacts:
+        base += " (" + ", ".join(contacts) + ")"
+    return base
+
+
+# RAG 라우팅/검색 디버그 로그 on/off (기본 off: 시나리오 출력 오염 방지)
+RAG_DEBUG = os.environ.get("RAG_DEBUG", "false").lower() in {"1", "true", "yes", "on"}
 
 _HAS_KEY = bool(os.environ.get("OPENAI_API_KEY"))
+print("Vector backend:", VECTOR_BACKEND)
+if VECTOR_BACKEND == "pinecone":
+    print("Pinecone index:", PINECONE_INDEX_NAME, "| API key:", "OK" if PINECONE_API_KEY else "MISSING")
 
 _LANGSMITH_ENABLED = LANGSMITH_TRACING.lower() in {"1", "true", "yes", "on"}
 _LANGSMITH_HAS_KEY = bool(os.environ.get("LANGSMITH_API_KEY"))

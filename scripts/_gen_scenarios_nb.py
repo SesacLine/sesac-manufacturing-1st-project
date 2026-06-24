@@ -48,7 +48,6 @@ CHECK_EXPR = {
     "S10_empty_history": "v2._check_failure_history_actions",
     "S11_maintenance_guide": "v2._check_evidence_only",
     "S12_missing_guide": "v2._check_evidence_empty",
-    "R1_safe_advisory": "v2._check_safe_advice",
     "R2_injection_in_doc": 'v2._checks_intake_block("injection")',
     "R3_output_safety_direct": "v2._check_output_safety_direct",
     "R4_multiturn_sql_followup": "v2._check_multiturn_sql_followup",

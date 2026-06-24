@@ -702,6 +702,76 @@ def _synthesize_answer(ctx: dict, allowed_numbers: set[str]) -> tuple[str, list[
     """LLM(tier=final) 합성 → 품질/숫자 가드 → 1회 보수. (answer, 남은 issues) 반환.
     LLM 사용 불가/빈 응답이면 ('', [사유])."""
     user_prompt = FINAL_ANSWER_USER_PROMPT.format(**ctx)
+def _verdict_banner(pred, sql, ev) -> str:
+    """답변 맨 앞 한 줄 종합 판단(결정적)."""
+    if pred and getattr(pred, "status", None) == "NEEDS_INPUT":
+        return "ℹ️ 종합 판단: 입력 부족 — 정확한 진단을 위해 추가 데이터가 필요합니다."
+    if pred and pred.risk_flags:
+        levels = [str(r.get("level", "")).lower() for r in pred.risk_flags]
+        lv, emo = ("높음", "🔴") if "high" in levels else ("중간", "🟡") if "medium" in levels else ("낮음", "🟢")
+        types = [_short_failure(r.get("failure_type")) for r in pred.risk_flags
+                 if str(r.get("level", "")).lower() in {"high", "medium"}]
+        ts = " · ".join(dict.fromkeys(types)) or "주의 신호"
+        return f"{emo} 종합 판단: 위험 {lv} — {ts}"
+    if pred and getattr(pred, "status", None) in {"OK", "PARTIAL"}:
+        return "🟢 종합 판단: 입력 기준 뚜렷한 고위험 신호 없음"
+    if sql is not None:
+        return "🗂 종합 판단: 과거 고장 이력 요약"
+    if ev is not None:
+        return "📄 종합 판단: 점검 문서 근거 요약"
+    return "ℹ️ 종합 판단"
+
+def _missing_block(pred) -> str:
+    if not (pred and getattr(pred, "status", None) == "NEEDS_INPUT"):
+        return ""
+    miss = ", ".join(_label_feature(x) for x in (pred.missing_features or [])) or "추가 입력값"
+    return ("추가로 필요한 입력\n"
+            f"현재 입력만으로는 정확한 진단이 어렵습니다. 다음 값을 입력해 주세요: {miss}")
+
+def _history_block(sql) -> str:
+    if sql is None:
+        return ""
+    body = _history_summary_for_answer(sql)
+    if not body:
+        return ""
+    return "과거 고장 이력\n" + body
+
+def _evidence_block(ev) -> str:
+    if not ev:
+        return ""
+    status = getattr(ev, "status", None)
+    if status == "OK" and ev.evidence_summary:
+        _parts = [p.strip() for p in ev.evidence_summary.split("\n") if p.strip()]
+        _cited = [p for p in _parts if "[C" in p][:4]
+        return "문서 근거\n" + ("\n".join(_cited) if _cited else ev.evidence_summary[:600])
+    if status == "LOW_RELEVANCE":
+        body = ev.evidence_summary or "검색된 문서의 관련성이 낮아 단정하기 어렵습니다."
+        return "문서 근거\n" + body + "\n(관련성이 낮아 참고용입니다. 추가 문서 확인이 필요합니다.)"
+    if status == "EMPTY":
+        # NO_EVIDENCE 등으로 근거가 없을 때: evidence_agent가 넣은 담당자 확인 안내를 그대로 노출(추측 금지).
+        msg = (getattr(ev, "evidence_summary", "") or "").strip()
+        return "문서 근거\n" + (msg or "현재 검색된 문서 근거만으로는 단정하기 어렵습니다.")
+    return ""  # FAIL → 섹션 생략
+
+HEADLINE_SYS = (
+    "너는 제조 진단 답변의 첫 요약 문장 작성자다. 주어진 진단/이력/문서 요지를 바탕으로, "
+    "사용자가 가장 먼저 알아야 할 핵심과 가장 먼저 할 일을 1~2문장으로만 쓴다. "
+    "표·수치 나열·체크리스트·섹션 제목은 쓰지 마라(뒤에 시스템이 정확한 수치로 붙인다). "
+    "위험한 실행 지시(점검 없이 재가동 등)는 절대 하지 말고, 단정 대신 '확인 필요'·'점검 필요'로 표현한다. "
+    "한국어 1~2문장만 출력하라."
+)
+
+def _headline(pred, sql, ev, user_q: str) -> str:
+    facts = []
+    if pred and pred.risk_flags:
+        top = pred.risk_flags[0]
+        facts.append(f"진단: {_short_failure(top.get('failure_type'))} 등 위험 {_risk_level_ko(top.get('level'))}")
+    elif pred and getattr(pred, "status", None) == "NEEDS_INPUT":
+        facts.append("진단: 입력 부족으로 추가 데이터 필요")
+    if sql is not None:
+        facts.append("과거 고장 이력 조회됨")
+    if ev is not None and getattr(ev, "status", None) in {"OK", "LOW_RELEVANCE"}:
+        facts.append("관련 문서 근거 있음")
     try:
         answer = call_llm(FINAL_ANSWER_SYSTEM_PROMPT, user_prompt, tier="final").strip()
     except Exception as e:

@@ -158,7 +158,7 @@ class SupervisorPlannerDecision(BaseModel):
     """LLM 기반 supervisor planning 결과. Regex keyword routing을 대체한다."""
     intent: Literal[
         "prediction_diagnosis", "document_qa", "history_lookup", "combined_analysis",
-        "safety_guidance", "general_manufacturing",
+        "general_manufacturing",
     ] = "general_manufacturing"
     needs_prediction: bool = False
     needs_evidence: bool = False
@@ -299,7 +299,7 @@ class TaskSpec(BaseModel):
 class ExecutionPlan(BaseModel):
     intent: Literal[
         "prediction_diagnosis", "document_qa", "history_lookup", "combined_analysis",
-        "safety_guidance", "general_manufacturing",
+        "general_manufacturing",
     ]
     tasks: list[TaskSpec] = Field(default_factory=list)
     created_by: Literal["rule", "llm", "hybrid"] = "hybrid"
