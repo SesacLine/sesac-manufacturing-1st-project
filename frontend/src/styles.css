@@ -514,6 +514,21 @@ body {
   color: #1f2937;
 }
 
+/* 완료 후 답변 위에 남는 진행 단계: 살짝 죽인 톤 + 접이식 토글 */
+.progress-steps.completed {
+  background: transparent;
+  margin-bottom: 10px;
+}
+
+.progress-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+
 .step-list {
   list-style: none;
   margin: 0;
@@ -688,4 +703,144 @@ body {
 
 .usage-note {
   line-height: 1.5;
+}
+
+/* ---------- SQL(DB) 결과 카드 + 클릭형 citation ---------- */
+.db-section {
+  margin-top: 4px;
+}
+
+.db-toggle,
+.cite-chip {
+  border: 1px solid var(--border);
+  background: #fff;
+  color: #111827;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.db-toggle {
+  font-weight: 600;
+}
+
+.db-toggle:hover,
+.cite-chip:hover {
+  background: #f3f4f6;
+}
+
+.db-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.db-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  padding: 10px 12px;
+  font-size: 12.5px;
+}
+
+.db-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed var(--border);
+}
+
+.db-card-ft {
+  font-weight: 700;
+  color: var(--primary);
+}
+
+.db-card-comp {
+  font-weight: 600;
+}
+
+.db-card-date {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.db-card-body {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.db-card-field {
+  display: flex;
+  gap: 6px;
+}
+
+.db-card-field dt {
+  flex: 0 0 72px;
+  color: var(--muted);
+}
+
+.db-card-field dd {
+  margin: 0;
+  flex: 1;
+  word-break: break-word;
+}
+
+.cite-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cite-chip {
+  width: 100%;
+}
+
+.cite-chip.open {
+  border-color: var(--primary);
+}
+
+.cite-id {
+  font-weight: 700;
+  color: var(--primary);
+}
+
+.cite-chunk,
+.cite-caret {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cite-detail {
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  padding: 8px 10px;
+  background: #fafafa;
+  font-size: 12.5px;
+}
+
+.cite-detail .cite-source {
+  margin-bottom: 4px;
+}
+
+.cite-snippet {
+  line-height: 1.5;
+  color: #374151;
+  white-space: pre-wrap;
+}
+
+.evidence-note {
+  margin-top: 2px;
 }

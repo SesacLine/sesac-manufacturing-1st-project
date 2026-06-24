@@ -14,6 +14,7 @@ CONTEXT_DECISION_SYS = (
     "현재 사용자 발화가 (1) 이전 artifact(prediction/sql/evidence)를 참조하는지와 "
     "(2) 이전 진단 입력 snapshot을 어떻게 재사용하는지를 한 번에 판단한다. 정규식이 아니라 의미로 판단하라.\n"
     "참조 판단: '그 이력', '방금 근거', '관련 조치', '이어서', '비슷한 사례'는 이전 artifact 참조일 수 있다. "
+    "어떤 artifact인지도 구분하라: 직전 SQL 고장이력 결과의 대응·예방·재발 방지 '조치', 사례, 다운타임을 이어 물으면 uses_previous_sql=True다('재발 방지'라는 단어만 보고 evidence로 넘기지 마라). 문서/매뉴얼 근거 자체를 이어 물으면 uses_previous_evidence=True다. "
     "SQL 조회/문서 검색 필요 여부, worker task 분해는 SupervisorPlanner가 담당하므로 너는 판단하지 않는다.\n"
     "mode는 CURRENT_ONLY, USE_ACTIVE, PATCH_ACTIVE, SELECT_HISTORY, REFER_ACTIVE_RESULT 중 하나다. "
     "CURRENT_ONLY는 현재 사용자가 직접 말한 값만 쓴다. 이전 feature 자동 보완은 금지다. "

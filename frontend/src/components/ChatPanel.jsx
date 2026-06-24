@@ -86,27 +86,37 @@ export default function ChatPanel({ userId, threadId }) {
       ...(inputFeatures ? { input_features: inputFeatures } : {}),
     }
 
+    // 스트리밍 동안 도착한 진행 단계를 따로 모아둔다(완료 후에도 답변 위에 남기기 위해).
+    const runSteps = []
+
     await chatStream(body, {
       debug,
       signal: controller.signal,
-      onStart: () => setSteps([]),
-      onStep: (evt) =>
-        setSteps((s) => [
-          ...s,
-          { node: evt.node, label: evt.label, detail: evt.detail },
-        ]),
+      onStart: () => {
+        runSteps.length = 0
+        setSteps([])
+      },
+      onStep: (evt) => {
+        const step = { node: evt.node, label: evt.label, detail: evt.detail }
+        runSteps.push(step)
+        setSteps((s) => [...s, step])
+      },
       onDone: (evt) => {
         const data = {
           user_id: evt.user_id,
           thread_id: evt.thread_id,
           answer: evt.answer,
           citations: evt.citations || [],
+          data_refs: evt.data_refs || [],
           warnings: evt.warnings || [],
           missing_inputs: evt.missing_inputs || [],
           blocked: evt.blocked,
+          sql: evt.sql || null,
+          evidence: evt.evidence || null,
           trace: evt.trace || null,
         }
-        setMessages((m) => [...m, { role: 'assistant', data }])
+        // 진행 단계를 메시지에 함께 보존한다(답변 위에 접이식으로 표시).
+        setMessages((m) => [...m, { role: 'assistant', data, steps: runSteps.slice() }])
         setSteps([])
         setLoading(false)
         abortRef.current = null

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react'
 import AssistantAnswer from './AssistantAnswer.jsx'
+import ProgressSteps from './ProgressSteps.jsx'
 
 // messages: [{ role: 'user'|'assistant', content?: string, data?: chatResponse }]
 export default function MessageList({ messages, loading }) {
@@ -20,7 +21,12 @@ export default function MessageList({ messages, loading }) {
         <div key={i} className={`message ${m.role}`}>
           <div className="msg-role">{m.role === 'user' ? '사용자' : '어시스턴트'}</div>
           {m.role === 'assistant' && m.data ? (
-            <AssistantAnswer data={m.data} />
+            <>
+              {m.steps && m.steps.length > 0 && (
+                <ProgressSteps steps={m.steps} completed />
+              )}
+              <AssistantAnswer data={m.data} />
+            </>
           ) : (
             <div className="answer-text">{m.content}</div>
           )}

@@ -269,6 +269,32 @@ def _dedup_take(values, limit: int) -> list[str]:
             break
     return out
 
+def _detail_identity(r: dict):
+    """detail 행의 사건 식별 키. 같은 사건을 다른 정렬/투영으로 조회한 중복을 잡는다.
+    id가 가장 정확하지만 투영마다 빠질 수 있어(쿼리별 SELECT 컬럼이 다름) 사용하지 않고,
+    detail 쿼리에 공통으로 존재하는 사건 컬럼 조합으로 식별한다.
+    event_date·failure_type이 없으면 식별 불가로 보고 dedup 대상에서 제외한다(보수적으로 유지)."""
+    date = str(r.get("event_date") or "").strip()[:10]
+    ftype = str(r.get("failure_type") or "").strip()
+    if not date or not ftype:
+        return None
+    return (date, ftype, str(r.get("component") or "").strip(), str(r.get("downtime_min") or "").strip())
+
+
+def _dedup_detail_rows(rows: list[dict]) -> list[dict]:
+    """여러 detail 쿼리(같은 모집단의 다른 정렬/투영) 결과를 합칠 때 사건 중복을 제거한다.
+    먼저 등장한 행(보통 컬럼이 더 풍부한 첫 쿼리)을 보존한다. 식별 불가 행은 그대로 둔다."""
+    seen, out = set(), []
+    for r in rows:
+        key = _detail_identity(r)
+        if key is not None and key in seen:
+            continue
+        if key is not None:
+            seen.add(key)
+        out.append(r)
+    return out
+
+
 def _history_facts(sql: Optional[SQLHistoryArtifact]) -> str:
     """SQL 이력에서 '정확한 수치'만 결정적으로 추출한 검증 facts(verified numbers).
     문장 구조/섹션/표현은 최종 답변 LLM이 담당한다 — 여기서는 숫자 환각만 차단한다(고정 틀 없음)."""
@@ -289,6 +315,9 @@ def _history_facts(sql: Optional[SQLHistoryArtifact]) -> str:
             (agg_rows if r.query_type == "aggregate" else detail_rows).extend(r.rows or [])
     elif sql.rows:
         (agg_rows if sql.query_type == "aggregate" else detail_rows).extend(sql.rows)
+
+    # 여러 detail 쿼리가 같은 사건을 다른 정렬/투영으로 조회하면 행이 중복된다 → 집계 전 사건 단위 dedup.
+    detail_rows = _dedup_detail_rows(detail_rows)
 
     facts: list[str] = []
     if detail_rows:

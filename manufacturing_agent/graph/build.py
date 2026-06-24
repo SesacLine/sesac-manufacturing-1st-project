@@ -12,7 +12,9 @@ from manufacturing_agent.gates.quality_gates import evidence_gate, output_safety
 from manufacturing_agent.graph.dispatcher import orchestrator_dispatcher, route_after_intake, route_after_orchestrator, route_after_output_safety
 from manufacturing_agent.graph.planner import supervisor_planner_node
 from manufacturing_agent.graph.replanner import supervisor_replanner_node
-from manufacturing_agent.nodes.final_answer_node import final_answer_node
+# 실험: LLM-자유 경량 최종 답변 노드로 교체(롤백하려면 아래 import를 final_answer_node로 되돌린다)
+# from manufacturing_agent.nodes.final_answer_node import final_answer_node
+from manufacturing_agent.nodes.final_answer_llm_node import final_answer_node
 from manufacturing_agent.nodes.memory_writer_node import memory_writer_node
 
 # run_trace 관측 설정. RunTrace(contracts.context 정의)를 노드 실행마다 events에 누적한다.
