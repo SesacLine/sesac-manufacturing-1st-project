@@ -26,8 +26,9 @@ intake_gate → context_manager → supervisor_planner → orchestrator_dispatch
 manufacturing_agent/   ← 코어 로직 Python 패키지 (진단/RAG/SQL/게이트/그래프)
 api/                   ← FastAPI 서버. 진입점: api/main.py:app
 frontend/              ← React(Vite) 화면
-scripts/               ← 임베딩·회귀 시나리오 스크립트
-evals/                 ← 평가 프레임워크 (golden 데이터셋 + 러너)
+scripts/               ← 임베딩·시나리오 스크립트
+evals/                 ← 평가 프레임워크 (golden 데이터셋 + 러너 + calibration)
+tests/                 ← 단위·통합·LLM judge 테스트
 document/              ← RAG 원본 문서 (KOSHA PDF / OSHA HTML / Haas HTML)
 sql/                   ← failure_history 스키마 + seed
 agent_data/            ← 런타임 데이터 (SQLite). 자동 생성, git 제외
@@ -209,50 +210,118 @@ curl -X POST "http://localhost:8000/chat?debug=true" \
 
 ---
 
-## 5. 평가 프레임워크 (`evals/`)
+## 5. 평가 결과
 
-golden 데이터셋 기반 컴포넌트별 자동 평가. 자세한 지표 정의는 `docs/evaluation_framework.md`.
+3-Layer 전략으로 평가한다. **Layer 1·2는 API 키 없이 누구나 재현 가능**하다.
 
-### 평가 스크립트
+### Layer 1 — 결정론적 단위 테스트 (API 키 불필요)
 
 ```bash
-# [통합] routing · intake · multiturn · text_to_sql · rag 종합 대시보드
+uv run pytest tests/ -q --ignore=tests/test_llm_judge.py --ignore=tests/test_sql_quality.py
+```
+
+| 테스트 파일 | 케이스 | 결과 | 내용 |
+|---|---|---|---|
+| `test_prediction_service.py` | 28 | ✅ 28/28 | TWF/OSF/HDF/PWF 임계값·경계값, 물리 공식 기반 |
+| `test_intake_gate_regex.py` | 28 | ✅ 28/28 | 위험 운전·LOTO 무시 차단 14 / 오차단 방지 12 / 기타 |
+| `test_output_safety_regex.py` | 23 | ✅ 23/23 | 위험 지시 차단 + 안전 권고 오차단 방지 |
+| `test_quality_gates.py` | 18 | ✅ 18/18 | OK/FAIL/EMPTY 등 상태별 분기 |
+| `test_rag_taxonomy.py` | 6 | ✅ 6/6 | RAG taxonomy 분류 |
+| `test_regression.py` | — | ✅ | 회귀 보호 |
+
+### Layer 2 — SQLite 통합 테스트 (API 키 불필요)
+
+```bash
+uv run pytest tests/test_sql_quality.py -q
+```
+
+| 테스트 파일 | 케이스 | 결과 | 내용 |
+|---|---|---|---|
+| `test_sql_quality.py` | 27 | ✅ 27/27 | SELECT-only 강제, DML/DDL/다중문 차단, SQLite 실행 포함 |
+
+**Layer 1 + Layer 2 합산: 141/141 통과 (API 키 불필요 · 약 2.3초)**
+
+### Layer 3 — LLM 품질 평가 (API 키 필요)
+
+#### Supervisor 라우팅 평가
+
+```bash
+uv run python evals/scripts/run_dispatcher_eval.py
+uv run python evals/scripts/run_replanner_eval.py
+uv run python evals/scripts/run_sql_intent_eval.py
+```
+
+| 평가 항목 | 케이스 | 결과 |
+|---|---|---|
+| Dispatcher 라우팅 | 12 | ✅ 12/12 = **1.00** |
+| Replanner 액션 | 12 | ✅ 12/12 = **1.00** |
+| SQL Intent 분류 | 12 | ✅ 12/12 = **1.00** |
+
+#### RAG 품질 평가 (RAGAS)
+
+```bash
+uv run python evals/ragas/run_ragas.py
+```
+
+| 지표 | 전체 | 해석 |
+|---|---|---|
+| **faithfulness** | **0.92** | 검색 발동 시 근거 충실도 높음 (환각 적음) |
+| **context_precision** | **0.81** | 관련 문맥이 상위에 검색됨 |
+| context_recall | 0.49 | top-K·청크 크기 점검 대상 |
+| answer_relevancy | 0.13 | 포맷 아티팩트 (citation 불릿·헤징을 RAGAS가 회피로 오판 — faithfulness가 실제 지표) |
+| **예측 정확도 (1-2 트랙)** | **8/8 = 1.00** | OSF/HDF 고장 유형 전부 정확 분류 |
+
+#### LLM-as-a-Judge (Reference-Free 4축)
+
+```bash
+# 개별 케이스 실행
+uv run python tests/test_llm_judge.py --id fa_prediction_only
+
+# Calibration 검증 (judge 신뢰도 교정)
+uv run python evals/scripts/run_calibration_eval.py
+```
+
+- 평가 방법: **Reference-Free** — gold answer 대신 `facts_sheet`(시스템이 계산한 사실)에 서술 본문이 충실한지 직접 채점
+- 4축 루브릭: **G**roundedness · **C**ompleteness · **N**arrative Clarity · **N**o Overreach
+- Calibration: 결함을 일부러 심은 15건(clean 5 / 결함 10)으로 judge가 실제로 해당 결함을 깎는지 검증
+
+---
+
+## 6. 평가 프레임워크 (`evals/`)
+
+```bash
+# 통합 golden 평가 대시보드 (routing·intake·multiturn·sql·rag)
 PYTHONUTF8=1 uv run python evals/run_golden.py
 
-# [LLM judge] 최종 답변 품질 (결정적 체크 + LLM-as-judge 5축 루브릭)
+# LLM judge — 최종 답변 품질 (결정적 체크 + LLM-as-judge 4축 루브릭)
 PYTHONUTF8=1 uv run python evals/final_answer_judge.py
 
-# [종단 멀티턴] 실제 그래프를 같은 thread로 순차 실행
+# 종단 멀티턴 — 실제 그래프를 같은 thread로 순차 실행
 PYTHONUTF8=1 uv run python evals/multiturn_seq_eval.py
 ```
 
-### golden 데이터셋 (`evals/golden/`)
+### Golden 데이터셋 (`evals/golden/`)
 
 | 파일 | 컴포넌트 | 지표 |
 |---|---|---|
 | `routing.jsonl` | supervisor_planner | EM + per-label F1 |
 | `intake.jsonl` | intake_gate | 위험 Recall + False-Block률 |
 | `multiturn.jsonl` | context_manager | mode 정확도 + carryover F1 |
+| `multiturn_seq.jsonl` | context_manager | 순서 의존 멀티턴 |
 | `text_to_sql.jsonl` | sql_agent | Execution Accuracy + 안전 거절률 |
-| `rag_retrieval.jsonl` | evidence_agent (검색) | Recall@k + MRR |
-| `final_answer.jsonl` | final_answer_node | LLM judge 루브릭 + 숫자 환각률 |
+| `rag_retrieval.jsonl` | evidence_agent | Recall@k + MRR |
+| `final_answer.jsonl` | final_answer_node | LLM judge 루브릭 |
+| `llm_judge_cases.jsonl` | LLM judge | Reference-Free 4축, 12건 |
 
-### 회귀 테스트 (API 키 불필요)
+### Calibration 데이터셋 (`evals/calibration/`)
 
-```bash
-uv run pytest -q
-```
-
-### 시나리오 배치 실행
-
-```bash
-LANGSMITH_TRACING=false uv run python scripts/run_manufacturing_scenarios_v2.py --json
-LANGSMITH_TRACING=false uv run python scripts/run_manufacturing_scenarios_v2.py --json --full-answer
-```
+| 파일 | 케이스 | 내용 |
+|---|---|---|
+| `calibration_cases.jsonl` | 15건 | clean 5 / 결함 10, 5개 모드(예측·종합·이력·문서·입력부족) 커버 |
 
 ---
 
-## 6. 아키텍처
+## 7. 아키텍처
 
 | 컴포넌트 | 설명 |
 |---|---|
@@ -270,7 +339,7 @@ LANGSMITH_TRACING=false uv run python scripts/run_manufacturing_scenarios_v2.py 
 
 ---
 
-## 7. 개발 원칙
+## 8. 개발 원칙
 
 - 특정 시나리오 문장을 하드코딩하지 않는다
 - `orchestrator_dispatcher`에 LLM 호출을 넣지 않는다
@@ -283,7 +352,7 @@ LANGSMITH_TRACING=false uv run python scripts/run_manufacturing_scenarios_v2.py 
 
 ---
 
-## 8. 트러블슈팅
+## 9. 트러블슈팅
 
 | 증상 | 해결 |
 |---|---|
